@@ -1,0 +1,20 @@
+{
+  "name": "eu-ai-labelling",
+  "owner": {
+    "name": "Condense",
+    "url": "https://github.com/condensetech"
+  },
+  "metadata": {
+    "description": "Label AI-generated content with the official EU Icons from Claude Code and Codex."
+  },
+  "plugins": [
+    {
+      "name": "eu-ai-labelling",
+      "source": "./",
+      "description": "Apply the official EU Icons to AI-generated or AI-modified content, following Article 50(4) of the EU AI Act.",
+      "version": "0.1.0",
+      "license": "MIT",
+      "category": "productivity"
+    }
+  ]
+}

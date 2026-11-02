@@ -1,0 +1,20 @@
+# Test harness only. The plugin itself ships no Python package: label_tool
+# declares its own dependencies inline (PEP 723) and is run with `uv run`.
+[project]
+name = "eu-ai-labelling-tests"
+version = "0.0.0"
+requires-python = ">=3.10"
+dependencies = []
+
+[dependency-groups]
+dev = ["pytest>=8", "pillow>=10", "resvg-py>=0.5"]
+
+[tool.uv]
+package = false
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+markers = [
+    "claude_cli: needs the claude CLI; skipped when it is not installed",
+    "model: calls the model; skipped unless EU_AI_LABELLING_E2E_DIR is set and the claude CLI is installed",
+]

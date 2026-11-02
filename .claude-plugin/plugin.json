@@ -1,0 +1,13 @@
+{
+  "name": "eu-ai-labelling",
+  "version": "0.1.0",
+  "description": "Apply the official EU Icons to AI-generated or AI-modified content, following Article 50(4) of the EU AI Act and the Code of Practice on transparency of AI-generated content.",
+  "author": {
+    "name": "Condense",
+    "url": "https://github.com/condensetech"
+  },
+  "homepage": "https://github.com/condensetech/eu-ai-labelling",
+  "repository": "https://github.com/condensetech/eu-ai-labelling",
+  "license": "MIT",
+  "keywords": ["ai-act", "eu", "labelling", "ai-generated", "transparency", "disclosure"]
+}
