@@ -1,0 +1,19 @@
+# The fast test suite: label_tool, the skill's references and the plugin's
+# packaging. Tests that call the model (`model`) or need the claude
+# CLI (`claude_cli`) are left out; run those by hand (see README.md, Tests).
+name: tests
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  fast:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+      - name: Install the harness that runs the React label component
+        run: npm ci --prefix tests/evals/site
+      - name: Run the fast suite
+        run: uv run pytest -m "not model and not claude_cli"
