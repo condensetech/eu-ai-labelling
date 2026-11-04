@@ -1,0 +1,16 @@
+{
+  "description": "A named variant on an ordinary photo: burned in straight away.",
+  "files": {
+    "photo.png": {
+      "image": [
+        1200,
+        800
+      ]
+    }
+  },
+  "prompt": "/eu-ai-labelling label photo.png as partially AI-modified",
+  "expect": {
+    "variant": "Partially AI-Modified",
+    "labelled": true
+  }
+}

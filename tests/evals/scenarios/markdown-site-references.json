@@ -1,0 +1,38 @@
+{
+  "description": "A Hugo blog whose hero image is labelled as fully AI-generated: after the Labelled Copy, the English and the Italian post point to it, each image's alt text keeps its description and gains the AI mention in the post's language, and the Open Graph partial, whose path is built from a template variable, is left as it is and reported as a reference the agent couldn't update.",
+  "files": {
+    "config.toml": {
+      "text": "baseURL = \"https://trails.example.org/\"\ntitle = \"Trails\"\ndefaultContentLanguage = \"en\"\n"
+    },
+    "static/images/hero.png": {
+      "image": [
+        1200,
+        800
+      ]
+    },
+    "content/posts/trails.md": {
+      "text": "---\ntitle: Five trails for an autumn weekend\n---\n\n# Five trails for an autumn weekend\n\n![A trail among yellow larches](/images/hero.png)\n\nFrom the lakeside loop to the ridge walk, here are five routes for every pace.\n"
+    },
+    "content/posts/trails.it.md": {
+      "text": "---\ntitle: Cinque sentieri per un weekend d'autunno\n---\n\n# Cinque sentieri per un weekend d'autunno\n\n![Un sentiero tra i larici gialli](/images/hero.png)\n\nDal giro del lago alla cresta, ecco cinque percorsi per ogni passo.\n"
+    },
+    "layouts/partials/og-image.html": {
+      "text": "<meta property=\"og:image\" content=\"{{ .Site.BaseURL }}/images/hero.png\">\n"
+    }
+  },
+  "prompt": "/eu-ai-labelling label static/images/hero.png, the hero image of my Hugo blog, as fully AI-generated. I don't need a preview.",
+  "expect": {
+    "variant": "Fully AI-Generated",
+    "labelled": true,
+    "references": {
+      "image": "static/images/hero.png",
+      "updated": {
+        "content/posts/trails.md": "image generated (with|by|using) ai",
+        "content/posts/trails.it.md": "immagine generata con (l')?ia"
+      },
+      "not_updated": [
+        "layouts/partials/og-image.html"
+      ]
+    }
+  }
+}

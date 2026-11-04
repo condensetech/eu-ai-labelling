@@ -1,0 +1,19 @@
+{
+  "description": "An English HTML page, human-written and partly rewritten by AI, named as partially AI-modified: the accessible inline Basic EU Icon, an English \"modified\" text label and the marker, below the headline.",
+  "files": {
+    "page.html": {
+      "text": "<!DOCTYPE html>\n<html lang=\"en\">\n<head>\n  <meta charset=\"utf-8\">\n  <title>Our spring opening hours</title>\n</head>\n<body>\n  <main>\n    <h1>Our spring opening hours</h1>\n    <p>From 1 April the library opens at 8:30 on weekdays and stays open until 20:00 on Thursdays.</p>\n    <p>The reading room closes for maintenance on 12 April.</p>\n  </main>\n</body>\n</html>\n"
+    }
+  },
+  "prompt": "/eu-ai-labelling label page.html as partially AI-modified: I wrote it and an AI model rewrote the opening paragraph.",
+  "expect": {
+    "variant": "Basic",
+    "labelled": false,
+    "text_label": {
+      "file": "page.html",
+      "wording": "modified",
+      "label": "modified (with|by|using) ai",
+      "icon_name": "AI"
+    }
+  }
+}

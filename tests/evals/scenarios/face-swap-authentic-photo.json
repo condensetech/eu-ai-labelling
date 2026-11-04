@@ -1,0 +1,16 @@
+{
+  "description": "A real photo with an AI face swap: labelled Partially AI-Modified by burn-in, with no word on whether the law requires it.",
+  "files": {
+    "team-photo.png": {
+      "image": [
+        1200,
+        800
+      ]
+    }
+  },
+  "prompt": "/eu-ai-labelling label team-photo.png. It's a real photo I took at our company's annual meeting. I used an AI face-swap tool to replace our former CEO's face with the face of our new CEO, Marco Bianchi, who wasn't there, so it looks like he attended. Everything else in the photo is untouched. It will go on our public company website's news page. I don't need a preview.",
+  "expect": {
+    "variant": "Partially AI-Modified",
+    "labelled": true
+  }
+}

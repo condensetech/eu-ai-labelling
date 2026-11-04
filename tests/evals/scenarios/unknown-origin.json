@@ -1,0 +1,16 @@
+{
+  "description": "An image whose origin nobody stated: the skill asks whether AI created it from scratch or edited a real one, and labels nothing yet.",
+  "files": {
+    "photo.png": {
+      "image": [
+        800,
+        600
+      ]
+    }
+  },
+  "prompt": "/eu-ai-labelling label photo.png",
+  "expect": {
+    "labelled": false,
+    "asks_origin": true
+  }
+}

@@ -1,0 +1,17 @@
+{
+  "description": "Satirical AI art with the variant named: the skill still asks whether to add a caption or burn the icon in.",
+  "files": {
+    "minister-satire.png": {
+      "image": [
+        1200,
+        800
+      ]
+    }
+  },
+  "prompt": "/eu-ai-labelling label minister-satire.png as fully AI-generated. I generated it from scratch with an image model for this week's cover of our satire magazine's website: a photorealistic picture of our country's Minister of Finance, Elena Marchetti, fast asleep at her desk in parliament under a mountain of unpaid bills. It looks like a real press photo, but it's satire for our readers, who know the magazine.",
+  "expect": {
+    "variant": "Fully AI-Generated",
+    "labelled": false,
+    "asks_placement": true
+  }
+}

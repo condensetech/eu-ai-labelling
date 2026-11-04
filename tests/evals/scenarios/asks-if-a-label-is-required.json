@@ -1,0 +1,14 @@
+{
+  "description": "Asked whether a reviewed news article needs a Label: no verdict, the official sources, an offer to label, and no file changed.",
+  "files": {
+    "council-budget.md": {
+      "text": "# City council approves 2027 budget\n\nThe city council approved the 2027 budget on Tuesday by 21 votes to 12. The budget raises spending on public transport by 8% and freezes the local property tax.\n\nCouncillors from the opposition criticised the cuts to library opening hours.\n"
+    }
+  },
+  "prompt": "/eu-ai-labelling does council-budget.md need an AI label? An AI model drafted this news article from the council's press release. Our managing editor, Giulia Ferri, who holds editorial responsibility for our local news site, then reviewed it in full: she fact-checked every figure against the council minutes, rewrote two paragraphs and signed it off. Nobody used AI on it after her sign-off. It will be published on our public local news website.",
+  "expect": {
+    "variant": "Basic",
+    "labelled": false,
+    "asks_if_required": true
+  }
+}

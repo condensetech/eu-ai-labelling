@@ -1,0 +1,27 @@
+{
+  "description": "A satirical image the user wants labelled as fully AI-generated with a caption, not burned in: the Italian article where it is used gets, right below the image reference, the Basic EU Icon (official SVG copied into the project), the text label \"Immagine generata con IA\" and the marker. The image's alt text gets the same text label after its description. The image itself is untouched and no Labelled Copy is written.",
+  "files": {
+    "satira.png": {
+      "image": [
+        1200,
+        800
+      ]
+    },
+    "articolo.md": {
+      "text": "# La settimana in parlamento\n\nAnche questa settimana il bilancio non è stato approvato.\n\n![La ministra addormentata sotto le bollette](satira.png)\n\nLa ministra ha assicurato che la manovra arriverà entro dicembre.\n"
+    }
+  },
+  "prompt": "/eu-ai-labelling label satira.png as fully AI-generated. It's satire, a Creative Work, so don't burn the icon into the picture: add the label as a caption under the image in articolo.md.",
+  "expect": {
+    "variant": "Basic",
+    "labelled": false,
+    "text_label": {
+      "file": "articolo.md",
+      "wording": "generated",
+      "label": "immagine generata con (l')?ia",
+      "below": "![La ministra addormentata sotto le bollette](satira.png)",
+      "icon_name": "IA",
+      "alt_mention": "immagine generata con (l')?ia"
+    }
+  }
+}

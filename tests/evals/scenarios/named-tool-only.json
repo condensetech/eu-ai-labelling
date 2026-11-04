@@ -1,0 +1,16 @@
+{
+  "description": "The user names the AI tool but not whether it created the image from scratch or edited a real one: the skill asks, and labels nothing yet.",
+  "files": {
+    "hero.png": {
+      "image": [
+        1200,
+        800
+      ]
+    }
+  },
+  "prompt": "/eu-ai-labelling label hero.png, I made it with Midjourney",
+  "expect": {
+    "labelled": false,
+    "asks_origin": true
+  }
+}

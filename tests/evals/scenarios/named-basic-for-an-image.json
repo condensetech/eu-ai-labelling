@@ -1,0 +1,22 @@
+{
+  "description": "The Basic icon named for an image: label_tool cannot burn Basic into an image, so the skill labels nothing, says Basic doesn't apply to an image, and asks whether the image is fully AI-generated or AI-modified.",
+  "files": {
+    "photo.png": {
+      "image": [
+        1200,
+        800
+      ]
+    }
+  },
+  "prompt": "/eu-ai-labelling label photo.png with the basic icon",
+  "expect": {
+    "variant": "Basic",
+    "labelled": false,
+    "reply_matches": [
+      "basic[^\\n]*(documents|text|sites|images?\\b)",
+      "ai-generated",
+      "modified",
+      "\\?"
+    ]
+  }
+}

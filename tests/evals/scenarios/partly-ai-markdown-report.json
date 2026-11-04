@@ -1,0 +1,20 @@
+{
+  "description": "Only one section of a Markdown report is AI-made: only that section is labelled, below its heading, and nothing is added at the top.",
+  "files": {
+    "report.md": {
+      "text": "# Quarterly sales report\n\nSales grew 4% in the third quarter, driven by the northern region.\n\n## Regional results\n\nThe northern region grew 9%; the south was flat.\n\n## Outlook\n\nDemand is expected to soften in the fourth quarter as holiday promotions end earlier.\n"
+    }
+  },
+  "prompt": "/eu-ai-labelling I wrote report.md myself, except the Outlook section, which an AI model wrote entirely. Label that section as fully AI-generated.",
+  "expect": {
+    "variant": "Basic",
+    "labelled": false,
+    "text_label": {
+      "file": "report.md",
+      "wording": "generated",
+      "label": "generated (with|by|using) ai",
+      "section": "## Outlook",
+      "icon_name": "AI"
+    }
+  }
+}

@@ -1,0 +1,19 @@
+{
+  "description": "An Italian article named as fully AI-generated skips the assessment and is labelled in place: the Basic EU Icon (official SVG copied into the project), the text label \"Generato con IA\" in the article's language, and the marker.",
+  "files": {
+    "articolo.md": {
+      "text": "# Il nuovo orario dei treni regionali\n\nDal 14 dicembre cambia l'orario dei treni regionali in tutta la provincia. Le corse del mattino partiranno dieci minuti prima.\n\nLa regione ha pubblicato le nuove tabelle sul proprio sito.\n"
+    }
+  },
+  "prompt": "/eu-ai-labelling label articolo.md as fully AI-generated",
+  "expect": {
+    "variant": "Basic",
+    "labelled": false,
+    "text_label": {
+      "file": "articolo.md",
+      "wording": "generated",
+      "label": "generato con (l')?ia",
+      "icon_name": "IA"
+    }
+  }
+}

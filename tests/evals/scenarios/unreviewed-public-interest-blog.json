@@ -1,0 +1,19 @@
+{
+  "description": "A blog post an AI model wrote: labelled in place as generated, with no word on whether the law requires it.",
+  "files": {
+    "vaccine-schedule.md": {
+      "text": "# What the new childhood vaccine schedule means for your family\n\nFrom January, the national health service moves the second measles dose from age six to age four. Parents will receive a letter from their GP.\n"
+    }
+  },
+  "prompt": "/eu-ai-labelling label vaccine-schedule.md. An AI model wrote this post from start to finish. We publish it as-is on our public health-information blog, which thousands of parents read to stay informed about health policy. Nobody reviews or edits the posts before they go out.",
+  "expect": {
+    "variant": "Basic",
+    "labelled": false,
+    "text_label": {
+      "file": "vaccine-schedule.md",
+      "wording": "generated",
+      "label": "generated (with|by|using) ai",
+      "icon_name": "AI"
+    }
+  }
+}

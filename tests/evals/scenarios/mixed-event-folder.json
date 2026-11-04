@@ -1,0 +1,43 @@
+{
+  "description": "A folder where two images were generated and two are unknown: one question names only the two unknown ones, and nothing is labelled yet.",
+  "files": {
+    "event/team-1.png": {
+      "image": [
+        1200,
+        800
+      ]
+    },
+    "event/team-2.png": {
+      "image": [
+        1200,
+        800
+      ]
+    },
+    "event/crowd.png": {
+      "image": [
+        1200,
+        800
+      ]
+    },
+    "event/stage.png": {
+      "image": [
+        1200,
+        800
+      ]
+    }
+  },
+  "prompt": "/eu-ai-labelling label every image in event/. They're all photorealistic pictures of our real colleagues at last week's company summer party, and they all go on the news page of our public website. team-1.png and team-2.png were generated from scratch with an image model. crowd.png and stage.png were made by a colleague who's on holiday, so I don't know whether those two were generated from scratch or are real photos edited with AI.",
+  "expect": {
+    "labelled": false,
+    "batch_questions": {
+      "about": [
+        "crowd.png",
+        "stage.png"
+      ],
+      "not_about": [
+        "team-1.png",
+        "team-2.png"
+      ]
+    }
+  }
+}

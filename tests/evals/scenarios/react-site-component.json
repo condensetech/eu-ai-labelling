@@ -1,0 +1,43 @@
+{
+  "description": "Site integration in a React (Vite) project: the agent copies the official Basic SVGs into public/, writes one React label component with ARIA, a translatable text label, an Icon Colour for light or dark backgrounds and a keyboard-accessible second layer, and uses it below the AI-generated hero image. No image is burned in.",
+  "files": {
+    "package.json": {
+      "text": "{\n  \"name\": \"trails-blog\",\n  \"private\": true,\n  \"version\": \"0.1.0\",\n  \"type\": \"module\",\n  \"scripts\": {\n    \"dev\": \"vite\",\n    \"build\": \"vite build\"\n  },\n  \"dependencies\": {\n    \"react\": \"^18.3.1\",\n    \"react-dom\": \"^18.3.1\"\n  },\n  \"devDependencies\": {\n    \"@vitejs/plugin-react\": \"^4.3.1\",\n    \"vite\": \"^5.4.0\"\n  }\n}\n"
+    },
+    "index.html": {
+      "text": "<!DOCTYPE html>\n<html lang=\"en\">\n  <head>\n    <meta charset=\"UTF-8\" />\n    <title>Trails blog</title>\n  </head>\n  <body>\n    <div id=\"root\"></div>\n    <script type=\"module\" src=\"/src/main.jsx\"></script>\n  </body>\n</html>\n"
+    },
+    "vite.config.js": {
+      "text": "import { defineConfig } from \"vite\";\nimport react from \"@vitejs/plugin-react\";\n\nexport default defineConfig({ plugins: [react()] });\n"
+    },
+    "src/main.jsx": {
+      "text": "import { StrictMode } from \"react\";\nimport { createRoot } from \"react-dom/client\";\nimport App from \"./App.jsx\";\n\ncreateRoot(document.getElementById(\"root\")).render(\n  <StrictMode>\n    <App />\n  </StrictMode>\n);\n"
+    },
+    "src/App.jsx": {
+      "text": "import \"./App.css\";\n\nexport default function App() {\n  return (\n    <main className=\"post\">\n      <h1>Five trails for an autumn weekend</h1>\n      <img className=\"hero\" src=\"/hero.png\" alt=\"A mountain trail among yellow larches\" />\n      <p>From the lakeside loop to the ridge walk, here are five routes for every pace.</p>\n    </main>\n  );\n}\n"
+    },
+    "src/App.css": {
+      "text": ".post { max-width: 40rem; margin: 0 auto; font-family: system-ui, sans-serif; }\n.hero { width: 100%; height: auto; }\n"
+    },
+    "public/hero.png": {
+      "image": [
+        1200,
+        800
+      ]
+    }
+  },
+  "prompt": "/eu-ai-labelling add AI labels to my React site. I want a reusable label component, and use it in src/App.jsx right below the hero image, which was generated with AI. Add a short explanation that opens on hover or click.",
+  "expect": {
+    "variant": "Basic",
+    "labelled": false,
+    "site_component": {
+      "extensions": [
+        ".jsx",
+        ".tsx"
+      ],
+      "used_in": "src/App.jsx",
+      "label": "generated (with|by|using) ai",
+      "details": true
+    }
+  }
+}
