@@ -69,8 +69,8 @@ def test_an_hlg_video_is_previewed_and_labelled_as_written(tmp_path):
 def test_the_reference_says_how_hlg_is_kept_and_judged():
     text = VIDEO_MD.read_text()
     listed = section(text, "What can be labelled")
-    hlg = listed[listed.index("**HLG.**"):]
-    assert "never converted to SDR or PQ" in hlg and "75%" in hlg and "mastering display" in hlg
+    hdr = listed[listed.index("**HDR10 and HLG.**"):]
+    assert "never converted to SDR, nor HLG to PQ" in hdr and "75%" in hdr and "mastering display" in hdr
     assert "HLG" in step(text, "Preview and choose the corner")
     assert "HLG" in step(text, "Show it for approval")
     assert "HLG" in step(text, "When it can't be labelled")

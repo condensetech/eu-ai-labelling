@@ -15,8 +15,8 @@ from PIL import Image
 
 from helpers import sha256, icon_match
 from videos import (
-    FFMPEG, changed, fake_tool, ffmpeg, flat_mp4, frame_images, frame_times, needs_ffmpeg, probe, real_tool,
-    real_tools, streams, tool_env, video_stream,
+    FFMPEG, changed, fake_tool, ffmpeg, flat_mp4, frame_images, frame_times, link_planting_ffmpeg, needs_ffmpeg, probe,
+    real_tool, real_tools, streams, tool_env, video_stream,
 )
 
 pytestmark = needs_ffmpeg
@@ -171,6 +171,21 @@ esac''')
     assert result.json["error"]["code"] == "render_failed"
     assert sha256(tmp_path / "clip.ai-label.mp4") == previous
     assert sorted(p.name for p in tmp_path.iterdir() if p.is_file()) == ["clip.ai-label.mp4", "clip.mp4"]
+
+
+def test_a_link_planted_at_a_predictable_staged_name_is_never_written_through(tmp_path, label_tool):
+    video = flat_mp4(tmp_path / "clip.mp4", seconds=1, size=SIZE)
+    victim = tmp_path / "victim.txt"
+    victim.write_text("keep me")
+    env = link_planting_ffmpeg(tmp_path / "planting-bin", victim, tmp_path / "clip.ai-label.mp4")
+
+    result = apply(label_tool, tmp_path, video, "--variant", "generated", env=env)
+
+    assert result.returncode == 0, result.json
+    assert victim.read_bytes() == b"keep me"
+    copy = tmp_path / "clip.ai-label.mp4"
+    assert not copy.is_symlink() and video_stream(copy)["codec_name"] == "h264"
+    assert not [p for p in tmp_path.iterdir() if p.name.endswith(".tmp") and not p.is_symlink()]
 
 
 def test_a_labelled_copy_is_refused(tmp_path, label_tool):

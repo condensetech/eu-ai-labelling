@@ -13,13 +13,13 @@ from PIL import Image, ImageStat
 from helpers import sha256
 from test_video_hdr import altered_ffmpeg, apply, changed_box, median, unsupported
 from videos import (
-    FFMPEG, MASTER_DISPLAY, fake_tool, ffmpeg, frame_side_data, hdr10plus_info, hlg_code, hlg_video, needs_encoder,
+    FFMPEG, MASTER_DISPLAY, fake_tool, ffmpeg, frame_side_data, hdr10plus_info, hlg_video, needs_encoder,
     needs_ffmpeg, planes_10bit, real_tool, real_tools, rotated, streams, tool_env, tracked_mp4, video_stream,
 )
 
 pytestmark = [needs_ffmpeg, needs_encoder("libx265")]
 
-REFERENCE_WHITE = hlg_code(0.75)  # HDR reference white for HLG (ITU-R BT.2408): 75% signal, about 721
+REFERENCE_WHITE = 721  # HDR reference white for HLG (ITU-R BT.2408), 75% signal: 64 + 0.75 * 876 in 10-bit limited range
 
 
 def test_an_hlg_mp4_gets_an_hlg_copy_without_hdr10_metadata(tmp_path, label_tool):

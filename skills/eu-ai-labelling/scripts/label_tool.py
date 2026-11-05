@@ -93,6 +93,7 @@ lists a Labelled Copy under `skipped` instead.
 from __future__ import annotations
 
 import argparse
+import contextlib
 import io
 import json
 import math
@@ -164,6 +165,38 @@ class LabelToolError(Exception):
 
 def emit(payload: dict) -> None:
     sys.stdout.write(json.dumps(payload, indent=2) + "\n")
+
+
+@contextlib.contextmanager
+def staged_replace(target: Path):
+    """A new file next to `target`, uniquely named `.{name}.<random>.tmp`, to write into; moved onto `target`
+    once the block completes. A name nobody can predict is never a link planted beforehand, and the move
+    replaces whatever `target` is, a link included, without writing through it. On any failure the staged
+    file is removed and `target` is left as it was."""
+    import tempfile
+
+    handle, name = tempfile.mkstemp(prefix=f".{target.name}.", suffix=".tmp", dir=target.parent)
+    os.close(handle)
+    staged = Path(name)
+    try:
+        yield staged
+        os.replace(staged, target)
+    finally:
+        try:
+            staged.unlink(missing_ok=True)  # never leave a partial file behind
+        except OSError:
+            pass
+
+
+def rendered(staged: Path) -> bool:
+    """Whether a tool wrote anything into the `staged` file, which exists empty from the start."""
+    return staged.is_file() and staged.stat().st_size > 0
+
+
+def stderr_tail(stderr: str | bytes | None, lines: int = 1, fallback: str = "no output") -> str:
+    """The last `lines` lines a tool printed, on one line, for an error message."""
+    text = stderr.decode(errors="replace") if isinstance(stderr, bytes) else (stderr or "")
+    return " ".join(text.strip().splitlines()[-lines:]) or fallback
 
 
 def labelled_copy_path(original: Path) -> Path:
@@ -599,7 +632,7 @@ def is_labelled_copy(path: Path) -> bool:
 
 
 def media_of(path: Path) -> str:
-    """The reference a batch file goes to: `video` by its suffix, else `image`."""
+    """`video` by the file's suffix, else `image`: which commands a file goes to."""
     return "video" if path.suffix.lower() in VIDEO_SUFFIXES else "image"
 
 
@@ -742,20 +775,13 @@ def cmd_apply(args: argparse.Namespace) -> dict:
     overlay.alpha_composite(icon, (x, y))
     labelled = burn_in(source, overlay)
     metadata = matching_profile_only(metadata, labelled.mode)
-    # Write a new file and move it into place: an existing copy that is a link
-    # to the original (or anything else) is replaced, never written through,
-    # and a failed write leaves the previous copy as it was.
-    staged = target.with_name(f".{target.name}.{os.getpid()}.tmp")
+    # An existing copy that is a link to the original (or anything else) is
+    # replaced, never written through, and a failed write leaves it as it was.
     try:
-        labelled.save(staged, format=image_format, **metadata, **encoder_options(image_format, original))
-        os.replace(staged, target)
+        with staged_replace(target) as staged:
+            labelled.save(staged, format=image_format, **metadata, **encoder_options(image_format, original))
     except OSError as exc:
         raise LabelToolError("write_failed", f"Cannot write {target}: {exc}")
-    finally:
-        try:
-            staged.unlink(missing_ok=True)  # never leave a partial file behind
-        except OSError:
-            pass
 
     result = {
         "labelled_copy": str(target),
@@ -1356,7 +1382,7 @@ def cmd_references(args: argparse.Namespace) -> dict:
     root = Path(args.root or Path.cwd()).resolve()
     original = Path(args.image)
     original = (original if original.is_absolute() else Path.cwd() / original).resolve()
-    media = "video" if original.suffix.lower() in VIDEO_SUFFIXES else "image"
+    media = media_of(original)
     if media == "video" and (args.alt_mention or args.wording or args.lang):
         raise LabelToolError(
             "usage", "A video has no alt text: run `references --apply` for it without --wording, "
@@ -1678,9 +1704,9 @@ def check_tool(name: str, platform: str) -> dict:
         return {"status": "unusable", "path": str(path), "message": f"{name} cannot run: {exc}"}
     first = (proc.stdout or "").splitlines()[:1]
     if proc.returncode != 0 or not first or not first[0].startswith(f"{name} version"):
-        detail = (proc.stderr or proc.stdout or "").strip().splitlines()[-1:] or ["no version printed"]
+        detail = stderr_tail(proc.stderr or proc.stdout, fallback="no version printed")
         return {"status": "unusable", "path": str(path),
-                "message": f"{name} -version failed (exit {proc.returncode}): {detail[0]}"}
+                "message": f"{name} -version failed (exit {proc.returncode}): {detail}"}
     return {"status": "available", "path": str(path), "version": first[0].split()[2]}
 
 
@@ -1714,11 +1740,13 @@ def tool_capabilities(ffmpeg: str) -> dict:
         "_all": found}
 
 
-def video_tools_report() -> dict:
+def video_tools_report() -> tuple[dict, dict | None]:
+    """What `video-tools` prints, and every name the ffmpeg build lists by kind (None when not ready)."""
     platform, simulated = current_platform()
     tools = {name: check_tool(name, platform) for name in VIDEO_TOOLS}
     ready = all(t["status"] == "available" for t in tools.values())
     report = {"ready": ready, "platform": platform, "tools": tools}
+    found = None
     if simulated:
         report["simulated"] = True
     if ready:
@@ -1734,17 +1762,18 @@ def video_tools_report() -> dict:
     else:
         report["install"] = {"platform": platform, "simulated": simulated, "steps": INSTALL_GUIDANCE[platform],
                              "after": INSTALL_AFTER, "note": INSTALL_NOTE}
-    return report
+    return report, found
 
 
 def cmd_video_tools(args: argparse.Namespace) -> dict:
-    return video_tools_report()
+    return video_tools_report()[0]
 
 
 def require_video_tools() -> dict:
-    """The tools' paths, or `video_tools_missing` with what to do."""
-    platform, _ = current_platform()
-    tools = {name: check_tool(name, platform) for name in VIDEO_TOOLS}
+    """The tools' paths and, under `listed`, every name the ffmpeg build lists by kind: the build is probed
+    once per command. Or `video_tools_missing` with what to do."""
+    report, found = video_tools_report()
+    tools = report["tools"]
     unavailable = [f"{n} is {t['status']} ({t['message']})" for n, t in tools.items() if t["status"] != "available"]
     if unavailable:
         raise LabelToolError(
@@ -1753,7 +1782,7 @@ def require_video_tools() -> dict:
             + ". Run `video-tools` for installation steps for this platform, ask the user to install them, "
               "and check again. Images, documents and sites can still be labelled without them.",
         )
-    return {n: t["path"] for n, t in tools.items()}
+    return {n: t["path"] for n, t in tools.items()} | {"listed": found}
 
 
 # --- inspection -----------------------------------------------------------------
@@ -1781,17 +1810,42 @@ def number(value) -> float | None:
         return None
 
 
+EBML_MAGIC, EBML_DOCTYPE = b"\x1a\x45\xdf\xa3", 0x4282
+EBML_HEADER_MAX_BYTES = 4096  # far more than any EBML header holds
+
+
 def ebml_doctype(path: Path) -> str | None:
-    """`webm` or `matroska`, read from the file's EBML header, else None."""
+    """`webm` or `matroska`: the DocType element of the file's EBML header, else None (no header, or one
+    cut short or malformed)."""
+    def vint(at: int, keep_marker: bool = False) -> tuple[int, int] | None:
+        """An EBML variable-length integer at `at`: (value, where the next field starts)."""
+        if at >= len(head) or not head[at]:
+            return None
+        length = 9 - head[at].bit_length()  # the leading zero bits, plus the marker bit
+        if at + length > len(head):
+            return None
+        value = head[at] if keep_marker else head[at] & (0xFF >> length)
+        for byte in head[at + 1: at + length]:
+            value = value << 8 | byte
+        return value, at + length
+
     with path.open("rb") as handle:
-        head = handle.read(64)
-    if not head.startswith(b"\x1a\x45\xdf\xa3"):
+        head = handle.read(EBML_HEADER_MAX_BYTES)
+    header = vint(len(EBML_MAGIC)) if head.startswith(EBML_MAGIC) else None
+    if not header:
         return None
-    at = head.find(b"\x42\x82")
-    if at < 0:
-        return None
-    size = head[at + 2] & 0x7F  # a one-byte EBML size: 0x80 | length
-    return head[at + 3: at + 3 + size].decode("ascii", "ignore")
+    length, at = header
+    end = min(at + length, len(head))
+    while at < end:  # the header's elements: ID, size, data
+        element = vint(at, keep_marker=True)
+        size = element and vint(element[1])
+        if not size:
+            return None
+        (element_id, _), (length, data) = element, size
+        if element_id == EBML_DOCTYPE:
+            return head[data: data + length].decode("ascii", "ignore").rstrip("\0") or None
+        at = data + length
+    return None
 
 
 def container_format(path: Path, format_name: str, tags: dict) -> str:
@@ -1908,8 +1962,9 @@ def stream_summary(stream: dict) -> dict:
     return summary
 
 
-def inspect_video(path: Path, tools: dict | None = None) -> dict:
-    """What ffprobe reads from the file: never its name alone. The file is only read."""
+def inspect_video(path: Path, tools: dict | None = None, support: bool = True) -> dict:
+    """What ffprobe reads from the file: never its name alone. The file is only read. With `support`, also
+    whether and how it can be labelled (`labelling`)."""
     if not path.is_file():
         raise LabelToolError("not_found", f"Video not found: {path}")
     tools = tools or require_video_tools()
@@ -1919,9 +1974,9 @@ def inspect_video(path: Path, tools: dict | None = None) -> dict:
         probed = json.loads(proc.stdout or "{}")
     except json.JSONDecodeError:
         probed = {}
-    message = (proc.stderr or "").strip().splitlines()[-1:] or ["no stream found"]
     if proc.returncode != 0 or not probed.get("streams"):
-        raise LabelToolError("unreadable_video", f"Cannot read {path.name} as a video: {message[0]}")
+        raise LabelToolError("unreadable_video", f"Cannot read {path.name} as a video: "
+                                                 f"{stderr_tail(proc.stderr, fallback='no stream found')}")
     fmt = probed.get("format", {})
     videos = [s for s in probed["streams"] if s.get("codec_type") == "video"
               and not (s.get("disposition") or {}).get("attached_pic")]
@@ -1963,7 +2018,8 @@ def inspect_video(path: Path, tools: dict | None = None) -> dict:
         "other_streams": [{**stream_summary(s), "type": s.get("codec_type")} for s in others
                           if s.get("codec_type") not in ("audio", "subtitle")],
     }
-    info["labelling"] = labelling_support(info, tools)
+    if support:
+        info["labelling"] = labelling_support(info, tools["listed"])
     return info
 
 
@@ -1980,7 +2036,11 @@ def cmd_video_inspect(args: argparse.Namespace) -> dict:
 MP4_AUDIO = ("aac", "mp3", "alac", "ac3", "eac3", "opus", "flac")
 MOV_AUDIO = ("aac", "mp3", "alac", "ac3", "pcm_s16le", "pcm_s24le")
 WEBM_AUDIO = ("opus", "vorbis")
-H264_PIX_FMTS = ("yuv420p", "yuvj420p", "yuv422p", "yuv444p")
+# A path's pixel formats, each with the `overlay` format that composites it at its own depth and chroma
+# resolution: overlay's default, 8-bit 4:2:0, would subsample 4:2:2 and 4:4:4 chroma and lose its detail.
+H264_PIX_FMTS = {"yuv420p": "yuv420", "yuvj420p": "yuv420", "yuv422p": "yuv422", "yuv444p": "yuv444"}
+VPX_PIX_FMTS = {"yuv420p": "yuv420"}
+HEVC_10BIT_PIX_FMTS = {"yuv420p10le": "yuv420p10"}
 X264 = {"codec": "h264", "codec_title": "H.264", "encoder": "libx264", "quality": "CRF 16",
         "encode": ["-preset", "medium", "-crf", "16"]}
 # The filters every render uses (render_command): the Label's padding and counter-rotation, and the overlay.
@@ -2027,7 +2087,7 @@ LABELLING_PATHS = [
         "description": "WebM with a VP9 video stream in SDR, 8-bit 4:2:0",
         "container": "webm", "codec": "vp9", "codec_title": "VP9", "encoder": "libvpx-vp9", "quality": "CRF 20",
         "encode": ["-crf", "20", "-b:v", "0", "-deadline", "good", "-cpu-used", "4", "-row-mt", "1"],
-        "dynamic_range": ("sdr",), "pix_fmts": ("yuv420p",), "muxer": "webm",
+        "dynamic_range": ("sdr",), "pix_fmts": VPX_PIX_FMTS, "muxer": "webm",
         "audio": WEBM_AUDIO, "subtitles": ("webvtt",),
         "preserves": (),  # not yet validated in WebM: these stop for a decision
         "needs": {"decoders": ["vp9"], "encoders": ["libvpx-vp9"], "filters": RENDER_FILTERS, "muxers": ["webm"]},
@@ -2038,7 +2098,7 @@ LABELLING_PATHS = [
         # VP8's CRF is constrained quality: it needs a bitrate ceiling, set high enough not to bind.
         "container": "webm", "codec": "vp8", "codec_title": "VP8", "encoder": "libvpx", "quality": "CRF 10",
         "encode": ["-crf", "10", "-b:v", "50M", "-deadline", "good", "-cpu-used", "4"],
-        "dynamic_range": ("sdr",), "pix_fmts": ("yuv420p",), "muxer": "webm",
+        "dynamic_range": ("sdr",), "pix_fmts": VPX_PIX_FMTS, "muxer": "webm",
         "audio": WEBM_AUDIO, "subtitles": ("webvtt",),
         "preserves": (),  # not yet validated in WebM: these stop for a decision
         "needs": {"decoders": ["vp8"], "encoders": ["libvpx"], "filters": RENDER_FILTERS, "muxers": ["webm"]},
@@ -2049,8 +2109,8 @@ LABELLING_PATHS = [
                         "with mastering display metadata"),
         "container": "mp4", "codec": "hevc", "codec_title": "HEVC Main 10", "encoder": "libx265", "quality": "CRF 14",
         "encode": ["-preset", "medium", "-crf", "14"],
-        "dynamic_range": ("hdr10",), "pix_fmts": ("yuv420p10le",), "colour": HDR10_COLOUR, "signal": "pq",
-        "overlay_format": "yuv420p10", "codec_tags": ("hvc1", "hev1"), "muxer": "mp4",
+        "dynamic_range": ("hdr10",), "pix_fmts": HEVC_10BIT_PIX_FMTS, "colour": HDR10_COLOUR, "signal": "pq",
+        "codec_tags": ("hvc1", "hev1"), "muxer": "mp4",
         "audio": MP4_AUDIO, "subtitles": ("mov_text",),
         "preserves": ("tracks",),  # rotation and variable timing are not yet validated in HDR10: they stop
         "needs": {"decoders": ["hevc"], "encoders": ["libx265"], "filters": RENDER_FILTERS + HDR_FILTERS,
@@ -2062,8 +2122,8 @@ LABELLING_PATHS = [
                         "limited range"),
         "container": "mp4", "codec": "hevc", "codec_title": "HEVC Main 10", "encoder": "libx265", "quality": "CRF 14",
         "encode": ["-preset", "medium", "-crf", "14"],
-        "dynamic_range": ("hlg",), "pix_fmts": ("yuv420p10le",), "colour": HLG_COLOUR, "signal": "hlg",
-        "overlay_format": "yuv420p10", "codec_tags": ("hvc1", "hev1"), "muxer": "mp4",
+        "dynamic_range": ("hlg",), "pix_fmts": HEVC_10BIT_PIX_FMTS, "colour": HLG_COLOUR, "signal": "hlg",
+        "codec_tags": ("hvc1", "hev1"), "muxer": "mp4",
         "audio": MP4_AUDIO, "subtitles": ("mov_text",),
         "preserves": ("tracks",),  # rotation and variable timing are not yet validated in HLG: such videos stop
         "needs": {"decoders": ["hevc"], "encoders": ["libx265"], "filters": RENDER_FILTERS + HDR_FILTERS,
@@ -2071,6 +2131,9 @@ LABELLING_PATHS = [
     },
 ]
 
+# What a mastering display declares (SMPTE ST 2086), as ffprobe names it: the copy carries every value.
+MASTERING_KEYS = tuple(f"{p}_{axis}" for p in ("red", "green", "blue", "white_point") for axis in "xy") + (
+    "min_luminance", "max_luminance")
 DYNAMIC_RANGE_TITLES = {"sdr": "SDR", "hdr10": "HDR10", "hlg": "HLG", "hdr10plus": "HDR10+",
                         "dolby_vision": "Dolby Vision", "other_hdr": "HDR with an unrecognised transfer"}
 DYNAMIC_METADATA = {"hdr10plus": "HDR10+ dynamic metadata (SMPTE ST 2094-40)", "dolby_vision": "Dolby Vision metadata"}
@@ -2201,10 +2264,18 @@ def stream_issues(info: dict, path: dict) -> list:
         found.append(issue("variable_frame_rate_not_validated",
                            f"Its frames are not evenly spaced (variable frame rate), which this version doesn't "
                            f"label in {container} without normalising the timing."))
-    if path.get("signal") == "pq" and "mastering_display" not in (video["colour"].get("hdr_metadata") or {}):
+    mastering = (video["colour"].get("hdr_metadata") or {}).get("mastering_display")
+    if path.get("signal") == "pq" and mastering is None:
         found.append(issue("hdr_metadata_missing",
                            "It carries no mastering display metadata, so the Labelled Copy's HDR10 metadata can't "
                            "be established from the source. This version won't guess it or drop the HDR."))
+    elif mastering is not None:
+        unreadable = [k for k in MASTERING_KEYS if ratio(str(mastering.get(k))) is None]
+        if unreadable:
+            found.append(issue("hdr_metadata_missing",
+                               f"Its mastering display metadata is incomplete or unreadable ({', '.join(unreadable)}), "
+                               "so the Labelled Copy can't declare the source's. This version won't guess it or "
+                               "drop the HDR."))
     return found
 
 
@@ -2216,10 +2287,11 @@ def capability_issues(path: dict, found: dict) -> list:
                   f"This FFmpeg build lacks what the {path['name']} path needs: {', '.join(status['missing'])}.")]
 
 
-def labelling_support(info: dict, tools: dict) -> dict:
+def labelling_support(info: dict, listed: dict) -> dict:
+    """Whether the video can be labelled, given the names the ffmpeg build lists (require_video_tools)."""
     path, issues = matching_path(info)
     if path:
-        issues = stream_issues(info, path) + capability_issues(path, tool_capabilities(tools["ffmpeg"])["_all"])
+        issues = stream_issues(info, path) + capability_issues(path, listed)
     return {"supported": path is not None and not issues, "path": path["name"] if path else None, "issues": issues}
 
 
@@ -2267,15 +2339,14 @@ def extract_frame(ffmpeg: str, video: Path, at: float, target: Path, view: str |
     proc = run_tool([ffmpeg, "-nostdin", "-v", "error", "-y", "-ss", f"{at:.3f}", "-i", video,
                      "-frames:v", "1", *(["-vf", view] if view else []), "-f", "image2", "-c:v", "png", target],
                     timeout=TOOL_TIMEOUT_S * 4)
-    if proc.returncode != 0 or not target.is_file():
+    if proc.returncode != 0 or not rendered(target):
         raise frame_failure(at, proc.stderr)
     return target
 
 
 def frame_failure(at: float, stderr: str | bytes | None) -> LabelToolError:
-    text = stderr.decode(errors="replace") if isinstance(stderr, bytes) else (stderr or "")
-    detail = text.strip().splitlines()[-1:] or ["no frame decoded"]
-    return LabelToolError("frame_extraction_failed", f"Cannot decode the frame at {at:.2f} s: {detail[0]}")
+    return LabelToolError("frame_extraction_failed",
+                          f"Cannot decode the frame at {at:.2f} s: {stderr_tail(stderr, fallback='no frame decoded')}")
 
 
 def sample_times(duration: float, count: int = 5) -> list:
@@ -2395,8 +2466,8 @@ def render_command(tools: dict, info: dict, path: dict, overlay: Path, position:
                 if info["video"]["colour"].get(key) in (None, "unknown")]
     tags = f",setparams={':'.join(untagged)}" if untagged else ""
     signal = hdr_label_filters(path) if path.get("signal") else ""
-    # overlay converts both pictures to its `format`, 8-bit 4:2:0 by default: a 10-bit path names its own.
-    blend = f":format={path['overlay_format']}" if path.get("overlay_format") else ""
+    # overlay converts both pictures to its `format`: the one keeping the source's depth and chroma.
+    blend = f":format={path['pix_fmts'][info['video']['pix_fmt']]}"
     # Even sizes and positions: overlay rounds a subsampled picture's x and y down to even, which a
     # counter-rotation would turn into a shift the other way on the displayed picture.
     graph = (f"[1:v]{signal}pad=ceil(iw/2)*2:ceil(ih/2)*2:0:0:color=black@0,{turn}null[label];"
@@ -2600,7 +2671,7 @@ def validate_output(tools: dict, source: dict, staged: Path, box: tuple, visible
                     hidden_at: float | None = None, hdr: dict | None = None) -> list:
     """Checks of the produced file itself, independent of the checks before rendering. `hdr` is what an
     HDR10 copy must declare and show (draw_label)."""
-    out = inspect_video(staged, tools)
+    out = inspect_video(staged, tools, support=False)
     src_v, out_v = source["video"], out["video"]
     checks = [
         check("container", out["container"]["format"] == source["container"]["format"],
@@ -2743,37 +2814,31 @@ def cmd_video_apply(args: argparse.Namespace) -> dict:
     original, tools, info, path = plan["original"], plan["tools"], plan["info"], plan["path"]
     video, display, duration, visibility = info["video"], plan["display"], plan["duration"], plan["visibility"]
     target = labelled_copy_path(original)
-    staged = target.with_name(f".{target.name}.{os.getpid()}.tmp")
     with tempfile.TemporaryDirectory(prefix="eu-ai-labelling-") as work:
         work = Path(work)
         label = draw_label(args, plan, work)
         box = label["box"]
         try:
-            proc = run_tool(render_command(tools, info, path, label["overlay"], label["position"], staged,
-                                           label["enable"], hdr=label["hdr"]))
-            if proc.returncode != 0 or not staged.is_file():
-                detail = (proc.stderr or "").strip().splitlines()[-3:]
-                raise LabelToolError("render_failed",
-                                     f"ffmpeg could not render {target.name}: {' '.join(detail) or 'no output'}. "
-                                     "The original and any previous Labelled Copy are unchanged.")
-            visible_at, hidden_at = label_check_times(visibility, info)
-            checks = validate_output(tools, info, staged, box, visible_at, work, hidden_at, hdr=label["hdr"])
-            failed = [c for c in checks if not c["passed"]]
-            if failed:
-                raise LabelToolError(
-                    "output_validation_failed",
-                    f"The rendered copy did not keep the source's characteristics: "
-                    + "; ".join(f"{c['check']}: {c['detail']}" for c in failed)
-                    + ". It was discarded; the original and any previous Labelled Copy are unchanged.",
-                    checks=checks)
-            os.replace(staged, target)
+            with staged_replace(target) as staged:
+                proc = run_tool(render_command(tools, info, path, label["overlay"], label["position"], staged,
+                                               label["enable"], hdr=label["hdr"]))
+                if proc.returncode != 0 or not rendered(staged):
+                    raise LabelToolError("render_failed",
+                                         f"ffmpeg could not render {target.name}: "
+                                         f"{stderr_tail(proc.stderr, 3, 'no output')}. "
+                                         "The original and any previous Labelled Copy are unchanged.")
+                visible_at, hidden_at = label_check_times(visibility, info)
+                checks = validate_output(tools, info, staged, box, visible_at, work, hidden_at, hdr=label["hdr"])
+                failed = [c for c in checks if not c["passed"]]
+                if failed:
+                    raise LabelToolError(
+                        "output_validation_failed",
+                        f"The rendered copy did not keep the source's characteristics: "
+                        + "; ".join(f"{c['check']}: {c['detail']}" for c in failed)
+                        + ". It was discarded; the original and any previous Labelled Copy are unchanged.",
+                        checks=checks)
         except OSError as exc:
             raise LabelToolError("write_failed", f"Cannot write {target}: {exc}")
-        finally:
-            try:
-                staged.unlink(missing_ok=True)
-            except OSError:
-                pass
     return {
         "labelled_copy": str(target),
         "original": str(original),
@@ -2892,25 +2957,17 @@ def render_excerpt(plan: dict, label: dict, span: tuple, target: Path) -> int:
     info, tools = plan["info"], plan["tools"]
     # `-ss` counts from the container's start, the playback timeline from the first video frame.
     lead = (info["video"]["start_time"] or 0) - (info["container"]["start_time"] or 0)
-    staged = target.with_name(f".{target.name}.{os.getpid()}.tmp")
-    try:
+    with staged_replace(target) as staged:
         proc = run_tool(render_command(tools, info, plan["path"], label["overlay"], label["position"], staged,
                                        label["enable"], excerpt=(span[0] + lead, span[1] - span[0]),
                                        hdr=label["hdr"]),
                         timeout=TOOL_TIMEOUT_S * 10)
-        if proc.returncode != 0 or not staged.is_file():
-            detail = (proc.stderr or "").strip().splitlines()[-1:] or ["no output"]
-            raise LabelToolError("render_failed", f"ffmpeg could not render the excerpt: {detail[0]}")
+        if proc.returncode != 0 or not rendered(staged):
+            raise LabelToolError("render_failed", f"ffmpeg could not render the excerpt: {stderr_tail(proc.stderr)}")
         decoded = len(packet_times(tools["ffprobe"], staged, 0))
         if not decoded:
             raise LabelToolError("render_failed", "The rendered excerpt holds no video frame.")
-        os.replace(staged, target)
-        return decoded
-    finally:
-        try:
-            staged.unlink(missing_ok=True)
-        except OSError:
-            pass
+    return decoded
 
 
 def sample_failure(exc: Exception) -> str:
@@ -2927,8 +2984,8 @@ def cmd_video_preview(args: argparse.Namespace) -> dict:
     out = preview_folder(args, original)
     try:
         out.mkdir(parents=True, exist_ok=True)
-        for old in out.iterdir():  # an earlier preview's samples, by the exact names it writes
-            if PREVIEW_SAMPLE.fullmatch(old.name) and old.is_file():
+        for old in out.iterdir():  # an earlier preview's samples, by the exact names it writes, or links there
+            if PREVIEW_SAMPLE.fullmatch(old.name) and (old.is_symlink() or old.is_file()):
                 old.unlink()
     except OSError as exc:
         raise LabelToolError("write_failed", f"Cannot write previews to {out}: {exc}")
@@ -2939,10 +2996,10 @@ def cmd_video_preview(args: argparse.Namespace) -> dict:
         for i, at in enumerate(sample_times(duration, args.frames), 1):
             target = out / f"frame-{i:02d}-{at:.2f}s.png"
             try:
-                extract_frame(tools["ffmpeg"], original, at, target, view)
+                with staged_replace(target) as staged:
+                    extract_frame(tools["ffmpeg"], original, at, staged, view)
                 frames.append({"time": at, "path": str(target), "status": "written"})
             except (LabelToolError, OSError) as exc:
-                target.unlink(missing_ok=True)
                 frames.append({"time": at, "path": None, "status": "failed", "error": sample_failure(exc)})
         for i, (start, end) in enumerate(excerpt_spans(visibility, duration), 1):
             target = out / f"excerpt-{i:02d}-{start:.2f}-{end:.2f}s{original.suffix}"

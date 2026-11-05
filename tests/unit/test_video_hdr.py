@@ -16,8 +16,8 @@ from PIL import Image, ImageStat
 
 from helpers import sha256
 from videos import (
-    FFMPEG, FFPROBE, fake_tool, ffmpeg, frame_side_data, hdr10_video, hdr10plus_info, needs_encoder, needs_ffmpeg, planes_10bit, pq_code,
-    real_tool, real_tools, rotated, streams, tool_env, tracked_mp4, video_stream,
+    FFMPEG, FFPROBE, fake_tool, ffmpeg, frame_side_data, hdr10_video, hdr10plus_info, hlg_video, needs_encoder,
+    needs_ffmpeg, planes_10bit, real_tool, real_tools, rotated, streams, tool_env, tracked_mp4, video_stream,
 )
 
 pytestmark = [needs_ffmpeg, needs_encoder("libx265")]
@@ -26,7 +26,9 @@ SIZE = "640x360"
 MASTERING = {"red_x": "34000/50000", "red_y": "16000/50000", "green_x": "13250/50000", "green_y": "34500/50000",
              "blue_x": "7500/50000", "blue_y": "3000/50000", "white_point_x": "15635/50000",
              "white_point_y": "16450/50000", "min_luminance": "1/10000", "max_luminance": "10000000/10000"}
-REFERENCE_WHITE = pq_code(203)  # SDR reference white (ITU-R BT.2408), about 573
+# SDR reference white (ITU-R BT.2408), 203 cd/m2, is PQ signal 0.5807 (SMPTE ST 2084; BT.2408 tabulates 58%):
+# 64 + 876 * 0.5807 in 10-bit limited range.
+REFERENCE_WHITE = 572.7
 
 
 def apply(label_tool, tmp_path, video, *args, env=None):
@@ -238,6 +240,33 @@ def test_hdr10_without_mastering_metadata_stops(tmp_path, label_tool):
     issues = unsupported(label_tool, tmp_path, video)
 
     assert [i["code"] for i in issues] == ["hdr_metadata_missing"]
+
+
+def unreadable_mastering_ffprobe(bin_dir: Path, value: str) -> dict:
+    """An ffprobe that reports the mastering display's peak luminance as `value`, as a file with
+    partial or malformed metadata would."""
+    real_tool(bin_dir, "ffmpeg")
+    fake_tool(bin_dir, "ffprobe", f'''
+case "$*" in
+  *frame_side_data*) "{FFPROBE}" "$@" | /usr/bin/sed 's#"max_luminance": "[^"]*"#"max_luminance": "{value}"#';;
+  *) exec "{FFPROBE}" "$@";;
+esac''')
+    return tool_env(bin_dir)
+
+
+@pytest.mark.parametrize("make", [hdr10_video, lambda path: hlg_video(path, mastering=True)], ids=["hdr10", "hlg"])
+@pytest.mark.parametrize("value", ["0/0", "N/A"])
+def test_unreadable_mastering_metadata_stops_before_rendering(tmp_path, label_tool, make, value):
+    video = make(tmp_path / "clip.mp4")
+    env = unreadable_mastering_ffprobe(tmp_path / "bin-partial", value)
+
+    issues = unsupported(label_tool, tmp_path, video, env=env)
+    inspected = label_tool("video-inspect", video, env=env).json["labelling"]
+
+    assert [i["code"] for i in issues] == ["hdr_metadata_missing"]
+    assert "max_luminance" in issues[0]["message"]
+    assert inspected["supported"] is False and inspected["issues"] == issues
+    assert not (tmp_path / "clip.ai-label.mp4").exists()
 
 
 def test_sdr_hevc_has_no_path(tmp_path, label_tool):

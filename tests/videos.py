@@ -248,6 +248,20 @@ def real_tools(bin_dir: Path) -> dict:
     return tool_env(bin_dir)
 
 
+def link_planting_ffmpeg(bin_dir: Path, victim: Path, *staged_for: Path) -> dict:
+    """An environment whose ffmpeg, when first asked its version, links to `victim` the name a render into
+    each `staged_for` file would get if it were the predictable `.{name}.{pid}.tmp`, as another user could;
+    then runs the real ffmpeg. Its parent is the label_tool process, so $PPID is that pid."""
+    real_tool(bin_dir, "ffprobe")
+    links = "; ".join(f'/bin/ln -s "{victim}" "{p.parent}/.{p.name}.$PPID.tmp"' for p in staged_for)
+    fake_tool(bin_dir, "ffmpeg", f'''
+case "$*" in
+  -version) {links};;
+esac
+exec "{FFMPEG}" "$@"''')
+    return tool_env(bin_dir)
+
+
 def without_tools(tmp_path: Path) -> dict:
     empty = tmp_path / "empty-bin"
     empty.mkdir(exist_ok=True)
@@ -341,14 +355,6 @@ def planes_10bit(path: Path, index: int) -> tuple[list, list, list, tuple[int, i
             (width, height))
 
 
-def pq_code(nits: float) -> float:
-    """The 10-bit limited-range code value of `nits` cd/m2 under the PQ transfer (SMPTE ST 2084)."""
-    m1, m2 = 2610 / 16384, 2523 / 4096 * 128
-    c1, c2, c3 = 3424 / 4096, 2413 / 4096 * 32, 2392 / 4096 * 32
-    y = (nits / 10000) ** m1
-    return 64 + 876 * ((c1 + c2 * y) / (1 + c3 * y)) ** m2
-
-
 # --- HLG -------------------------------------------------------------------------
 
 HLG_TAGS = ("-color_trc", "arib-std-b67", "-colorspace", "bt2020nc", "-color_range", "tv")
@@ -373,8 +379,3 @@ def hlg_video(path: Path, seconds: float = 1, size: str = "640x360", source: str
     ffmpeg("-f", "lavfi", "-i", content, "-vf", "format=yuv420p10le", "-c:v", "libx265", "-preset", "ultrafast",
            "-x265-params", ":".join(params), *HLG_TAGS, "-color_primaries", primaries, *extra, path)
     return path
-
-
-def hlg_code(signal: float) -> float:
-    """The 10-bit limited-range code value of an HLG (ARIB STD-B67) signal level from 0 to 1."""
-    return 64 + 876 * signal

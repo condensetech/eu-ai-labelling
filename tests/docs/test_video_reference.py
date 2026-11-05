@@ -54,9 +54,9 @@ def test_the_inspection_runs_as_written(tmp_path):
 
 
 def test_the_reference_never_installs_tools_itself():
-    text = VIDEO_MD.read_text()
-    assert "Never run an install command yourself" in text
-    assert "run `video-tools` again" in text
+    check = step(VIDEO_MD.read_text(), "Check the tools")
+    assert re.search(r"[Nn]ever run an install", check), "step 1 forbids running the install itself"
+    assert "ask them to install" in check and "run `video-tools` again" in check
 
 
 def test_the_skill_routes_local_videos_and_keeps_urls_out():
@@ -85,7 +85,7 @@ def test_the_reference_asks_for_the_visibility_and_states_the_defaults():
     assert "up to and including 60 seconds show it continuously" in choose
     assert "5 seconds from the start and then for 5 seconds every 60 seconds" in choose
     assert "not legal thresholds" in choose
-    assert "a list of chosen moments in the video isn't supported" in choose
+    assert "Only a window length and a recurrence can be set" in choose
 
 
 def test_the_reference_and_readme_no_longer_limit_the_length():
@@ -228,7 +228,7 @@ def test_the_corner_is_chosen_from_the_previews_before_applying():
     assert "Open every written frame" in preview
     for interference in ("faces", "text", "subtitles", "main subject"):
         assert interference in preview
-    assert "in every frame" in preview and "never plan to move it between scenes" in preview
+    assert "in every frame" in preview and "stays in one corner for the whole video" in preview
     assert "**ask the user** which corner to use, and wait" in preview
     assert "never call it checked" in preview and "`preview_failed`" in preview
     assert "run `video-preview` again" in preview
@@ -297,7 +297,7 @@ def test_a_stream_that_cant_be_kept_stops_with_an_issue_the_reference_explains(t
         assert f"`{found['code']}`" in when
     for name in ("additional_tracks", "audio_not_validated", "subtitles_not_validated", "rotation_not_validated"):
         assert f"`{name}`" in when
-    assert "never drop a track" in when
+    assert "keeps every track, stream and the picture as they are" in when
 
 
 def test_the_readme_says_what_a_video_copy_keeps_and_what_stops():

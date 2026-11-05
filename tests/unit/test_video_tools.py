@@ -14,7 +14,7 @@ import pytest
 from PIL import Image
 
 from helpers import sha256
-from videos import fake_tool, flat_mp4, needs_ffmpeg, real_tool, real_tools, tool_env, without_tools
+from videos import FFMPEG, fake_tool, flat_mp4, needs_ffmpeg, real_tool, real_tools, tool_env, without_tools
 
 pytestmark = needs_ffmpeg
 
@@ -220,3 +220,21 @@ def test_the_tools_list_validated_paths_and_whether_this_build_has_them(tmp_path
 
     path = next(p for p in result.json["paths"] if p["name"] == "mp4-h264-sdr")
     assert path["validated"] is True and path["available"] is True and path["missing"] == []
+
+
+@pytest.mark.parametrize("command", ["video-inspect", "video-apply", "video-preview"])
+def test_each_command_probes_the_build_once(tmp_path, label_tool, command):
+    video = flat_mp4(tmp_path / "clip.mp4", seconds=1, size="640x360")
+    bin_dir, log = tmp_path / "counting-bin", tmp_path / "probes.log"
+    real_tool(bin_dir, "ffprobe")
+    fake_tool(bin_dir, "ffmpeg", f'''
+case "$*" in
+  "-hide_banner -encoders") echo encoders >> "{log}";;
+esac
+exec "{FFMPEG}" "$@"''')
+    extra = () if command == "video-inspect" else ("--variant", "generated")
+
+    result = label_tool(command, video, *extra, env=tool_env(bin_dir))
+
+    assert result.returncode == 0, result.json
+    assert log.read_text().splitlines() == ["encoders"]

@@ -14,7 +14,8 @@ from PIL import Image, ImageChops, ImageStat
 
 from helpers import sha256
 from videos import (
-    FFMPEG, changed, corner_scenes, fake_tool, flat_mp4, frame_images, frame_times, needs_ffmpeg, real_tool,
+    FFMPEG, changed, corner_scenes, fake_tool, flat_mp4, frame_images, frame_times, link_planting_ffmpeg, needs_ffmpeg,
+    real_tool,
     real_tools, rotated, tool_env, white_quadrant,
 )
 
@@ -170,6 +171,48 @@ def test_previews_go_to_the_folder_asked_for(tmp_path, label_tool):
     assert sorted(p.name for p in out.iterdir()) == sorted(
         ["excerpt-notes.txt", *(Path(e["path"]).name for e in result.json["frames"] + result.json["excerpts"])]), \
         "an earlier preview's samples are replaced, and nothing else is removed"
+
+
+def test_links_at_the_sample_names_are_replaced_never_written_through(tmp_path, label_tool):
+    video = flat_mp4(tmp_path / "clip.mp4", seconds=2)
+    out = tmp_path / "previews"
+    out.mkdir()
+    first = preview(label_tool, tmp_path, video, "--out", out)
+    assert first.returncode == 0, first.json
+    names = [Path(e["path"]).name for e in first.json["frames"] + first.json["excerpts"]]
+    victims = tmp_path / "victims"
+    victims.mkdir()
+    kept = victims / "kept.txt"
+    kept.write_text("keep me")
+    for n, name in enumerate(names):
+        (out / name).unlink()
+        # Half the links point at a file, half at one that doesn't exist yet: neither is written.
+        (out / name).symlink_to(kept if n % 2 else victims / f"{n}.missing")
+
+    result = preview(label_tool, tmp_path, video, "--out", out)
+
+    assert result.returncode == 0, result.json
+    assert kept.read_text() == "keep me"
+    assert sorted(p.name for p in victims.iterdir()) == ["kept.txt"]
+    for entry in result.json["frames"] + result.json["excerpts"]:
+        written = Path(entry["path"])
+        assert entry["status"] == "written" and written.is_file() and not written.is_symlink()
+
+
+def test_a_link_planted_at_a_predictable_staged_name_is_never_written_through(tmp_path, label_tool):
+    video = flat_mp4(tmp_path / "clip.mp4", seconds=2)
+    out = tmp_path / "previews"
+    first = preview(label_tool, tmp_path, video, "--out", out)
+    samples = [Path(e["path"]) for e in first.json["frames"] + first.json["excerpts"]]
+    victim = tmp_path / "victim.txt"
+    victim.write_text("keep me")
+
+    result = preview(label_tool, tmp_path, video, "--out", out,
+                     env=link_planting_ffmpeg(tmp_path / "planting-bin", victim, *samples))
+
+    assert result.returncode == 0, result.json
+    assert victim.read_bytes() == b"keep me"
+    assert all(e["status"] == "written" for e in result.json["frames"] + result.json["excerpts"])
 
 
 def test_a_user_size_keeps_the_minimum_size_and_fit_checks(tmp_path, label_tool):

@@ -200,6 +200,38 @@ def test_av1_in_a_webm_stops_rather_than_becoming_vp9(tmp_path, label_tool):
 
 
 @needs_encoder("libvpx-vp9")
+def test_a_webm_whose_doctype_sits_late_in_its_header_is_still_read(tmp_path, label_tool):
+    plain = flat_mp4(tmp_path / "plain.webm", seconds=1, size=SIZE, codec="libvpx-vp9", extra=VPX_FAST)
+    data = plain.read_bytes()
+    assert data[4] & 0x80, "a one-byte EBML header size"
+    size, doctype = data[4] & 0x7F, data.find(b"\x42\x82")
+    # A Void element (0xEC) of 41 bytes before the DocType puts its ID on the 63rd and 64th bytes.
+    void = bytes([0xEC, 0x80 | 39]) + bytes(39)
+    padded = tmp_path / "clip.webm"
+    padded.write_bytes(data[:4] + bytes([0x80 | (size + len(void))]) + data[5:doctype] + void + data[doctype:])
+    assert padded.read_bytes().find(b"\x42\x82") == 62
+    assert probe(padded)["streams"], "ffprobe reads it"
+
+    result = label_tool("video-inspect", padded, env=real_tools(tmp_path / "bin"))
+
+    assert result.returncode == 0, result.json
+    assert result.json["container"]["format"] == "webm"
+
+
+@needs_encoder("libvpx-vp9")
+@pytest.mark.parametrize("cut", [5, 22, 25])
+def test_a_truncated_webm_header_is_unreadable_not_an_internal_error(tmp_path, label_tool, cut):
+    plain = flat_mp4(tmp_path / "plain.webm", seconds=1, size=SIZE, codec="libvpx-vp9", extra=VPX_FAST)
+    cut_short = tmp_path / "clip.webm"
+    cut_short.write_bytes(plain.read_bytes()[:cut])
+
+    result = label_tool("video-inspect", cut_short, env=real_tools(tmp_path / "bin"))
+
+    assert result.returncode != 0
+    assert result.json["error"]["code"] == "unreadable_video", result.json
+
+
+@needs_encoder("libvpx-vp9")
 def test_a_vp9_webm_in_4_4_4_stops(tmp_path, label_tool):
     video = tmp_path / "clip.webm"
     ffmpeg("-f", "lavfi", "-i", f"color=c=0x5aa0d2:s={SIZE}:r=25:d=1", "-c:v", "libvpx-vp9", *VPX_FAST,
@@ -251,3 +283,44 @@ def test_a_webm_keeps_its_colour_tags(tmp_path, label_tool):
     keys = ("color_primaries", "color_transfer", "color_space", "color_range")
     out, src = video_stream(tmp_path / "clip.ai-label.webm"), video_stream(video)
     assert {k: out.get(k) for k in keys} == {k: src.get(k) for k in keys} == dict(zip(keys, ("bt709",) * 3 + ("tv",)))
+
+
+# --- Chroma subsampling -------------------------------------------------------------
+
+def chroma_planes(path: Path) -> tuple[bytes, bytes, int, int]:
+    """The first frame's U and V planes, decoded at full resolution (4:4:4), and the frame size."""
+    stream = video_stream(path)
+    width, height = stream["width"], stream["height"]
+    proc = subprocess.run([FFMPEG, "-v", "error", "-i", str(path), "-frames:v", "1", "-f", "rawvideo",
+                           "-pix_fmt", "yuv444p", "-"], capture_output=True)
+    assert proc.returncode == 0, proc.stderr.decode()
+    plane = width * height
+    return proc.stdout[plane:2 * plane], proc.stdout[2 * plane:3 * plane], width, height
+
+
+# 1-px stripes of opposite chroma, along the axis the pixel format keeps at full resolution: 4:2:0 averages
+# each pair to grey (128). 4:4:4 keeps columns and rows; 4:2:2 keeps rows.
+STRIPES = {"yuv444p": "mod(X,2)", "yuv422p": "mod(Y,2)"}
+
+
+@pytest.mark.parametrize("suffix", [".mp4", ".mov"])
+@pytest.mark.parametrize("pix_fmt", ["yuv444p", "yuv422p"])
+def test_h264_4_4_4_and_4_2_2_keep_their_chroma_detail_outside_the_label(tmp_path, label_tool, pix_fmt, suffix):
+    video = tmp_path / f"clip{suffix}"
+    odd = STRIPES[pix_fmt]
+    ffmpeg("-f", "lavfi", "-i", f"nullsrc=s={SIZE}:r=25:d=1", "-vf",
+           f"format={pix_fmt},geq=lum=128:cb='if({odd},48,208)':cr='if({odd},208,48)'",
+           "-c:v", "libx264", "-qp", "0", "-pix_fmt", pix_fmt, video)
+
+    result = apply(label_tool, tmp_path, video, "--variant", "generated")
+
+    assert result.returncode == 0, result.json
+    copy = Path(result.json["labelled_copy"])
+    assert video_stream(copy)["pix_fmt"] == pix_fmt
+    (u0, v0, width, height), (u1, v1, *_) = chroma_planes(video), chroma_planes(copy)
+    # The left half of the picture: the Label is in the top-right.
+    left = [row * width + col for row in range(height) for col in range(width // 2)]
+    for before, after in ((u0, u1), (v0, v1)):
+        assert max(abs(before[i] - 128) for i in left) > 70, "the source has the stripes"
+        change = sum(abs(after[i] - before[i]) for i in left) / len(left)
+        assert change < 6, f"chroma changed by {change:.1f} on average outside the Label"
