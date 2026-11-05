@@ -44,6 +44,10 @@ def test_readme_installs_the_published_plugin_in_both_tools():
 
     assert f"/plugin marketplace add {REPOSITORY}" in lines
     assert f"/plugin install {PLUGIN_ID}" in lines
+    # Adding the marketplace alone installs nothing: the README says so and how to check.
+    assert "only adds the marketplace" in install
+    assert "/reload-plugins" in install
+    assert "claude plugin list" in install
     assert f"codex plugin marketplace add {REPOSITORY}" in lines
     # Codex installs the plugin from its plugin browser.
     assert "/plugins" in install

@@ -17,6 +17,8 @@ Claude Code:
 /plugin install eu-ai-labelling@eu-ai-labelling
 ```
 
+Run both: the first command only adds the marketplace, the second installs the plugin. Then start a new session (or run `/reload-plugins`) so `/eu-ai-labelling` shows up. To check the install, run `claude plugin list` in a terminal: `eu-ai-labelling@eu-ai-labelling` should be listed as enabled.
+
 Codex:
 
 ```
