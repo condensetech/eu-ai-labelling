@@ -347,3 +347,34 @@ def pq_code(nits: float) -> float:
     c1, c2, c3 = 3424 / 4096, 2413 / 4096 * 32, 2392 / 4096 * 32
     y = (nits / 10000) ** m1
     return 64 + 876 * ((c1 + c2 * y) / (1 + c3 * y)) ** m2
+
+
+# --- HLG -------------------------------------------------------------------------
+
+HLG_TAGS = ("-color_trc", "arib-std-b67", "-colorspace", "bt2020nc", "-color_range", "tv")
+
+
+def hlg_video(path: Path, seconds: float = 1, size: str = "640x360", source: str = "testsrc2",
+              max_cll: tuple | None = None, mastering: bool | str = False, hdr10plus: Path | None = None,
+              primaries: str = "bt2020", extra: tuple = ()) -> Path:
+    """A real HLG video: 10-bit 4:2:0 HEVC Main 10 encoded by libx265 with the HLG transfer (ARIB STD-B67),
+    `primaries` (BT.2020 by default) and the BT.2020 matrix in its VUI, and no static metadata unless
+    `mastering` (True for MASTER_DISPLAY, or x265's `master-display` string) or `max_cll` asks for it.
+    `source` is `testsrc2` (busy everywhere) or a colour (flat)."""
+    content = (f"testsrc2=s={size}:r=25:d={seconds}" if source == "testsrc2"
+               else f"color=c={source}:s={size}:r=25:d={seconds}")
+    params = ["log-level=error", f"colorprim={primaries}", "transfer=arib-std-b67", "colormatrix=bt2020nc"]
+    if mastering:
+        params.append(f"master-display={MASTER_DISPLAY if mastering is True else mastering}")
+    if max_cll:
+        params.append(f"max-cll={max_cll[0]},{max_cll[1]}")
+    if hdr10plus:
+        params.append(f"dhdr10-info={hdr10plus}")
+    ffmpeg("-f", "lavfi", "-i", content, "-vf", "format=yuv420p10le", "-c:v", "libx265", "-preset", "ultrafast",
+           "-x265-params", ":".join(params), *HLG_TAGS, "-color_primaries", primaries, *extra, path)
+    return path
+
+
+def hlg_code(signal: float) -> float:
+    """The 10-bit limited-range code value of an HLG (ARIB STD-B67) signal level from 0 to 1."""
+    return 64 + 876 * signal

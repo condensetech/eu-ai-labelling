@@ -240,16 +240,11 @@ def test_hdr10_without_mastering_metadata_stops(tmp_path, label_tool):
     assert [i["code"] for i in issues] == ["hdr_metadata_missing"]
 
 
-def test_hlg_and_sdr_hevc_have_no_path_yet(tmp_path, label_tool):
-    hlg = tmp_path / "hlg.mp4"
-    ffmpeg("-f", "lavfi", "-i", f"testsrc2=s={SIZE}:r=25:d=1", "-vf", "format=yuv420p10le", "-c:v", "libx265",
-           "-preset", "ultrafast", "-x265-params", "log-level=error:transfer=arib-std-b67:colorprim=bt2020",
-           "-color_primaries", "bt2020", "-color_trc", "arib-std-b67", "-colorspace", "bt2020nc", hlg)
+def test_sdr_hevc_has_no_path(tmp_path, label_tool):
     sdr = tmp_path / "sdr.mp4"
     ffmpeg("-f", "lavfi", "-i", f"testsrc2=s={SIZE}:r=25:d=1", "-c:v", "libx265", "-preset", "ultrafast",
            "-x265-params", "log-level=error", "-pix_fmt", "yuv420p", sdr)
 
-    assert [i["code"] for i in unsupported(label_tool, tmp_path, hlg)] == ["hdr_not_validated"]
     assert [i["code"] for i in unsupported(label_tool, tmp_path, sdr)] == ["codec_not_validated"]
 
 

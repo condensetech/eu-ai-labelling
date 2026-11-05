@@ -1993,10 +1993,18 @@ EVERY_CHARACTERISTIC = ("tracks", "rotation", "variable_timing")
 # rendering (`sdr_view`) also needs `lutrgb` and `colorchannelmixer`.
 REFERENCE_WHITE_NITS = 203
 HDR10_COLOUR = {"primaries": "bt2020", "transfer": "smpte2084", "matrix": "bt2020nc", "range": "tv"}
-PQ_FILTERS = ["format", "scale", "colorchannelmixer", "lutrgb"]
+# HLG: the Label's white is HDR reference white for HLG (ITU-R BT.2408), 75% of the HLG signal, which a
+# 1000 cd/m2 display shows at 203 cd/m2; its black stays black. HLG needs no HDR10 metadata: the copy
+# declares only what the source declares, and its transfer stays ARIB STD-B67 in the VUI.
+HLG_REFERENCE_WHITE = 0.75
+HLG_COLOUR = {"primaries": "bt2020", "transfer": "arib-std-b67", "matrix": "bt2020nc", "range": "tv"}
+# ARIB STD-B67 (HLG) OETF: a, b, c; and the system gamma of a 1000 cd/m2 display (ITU-R BT.2100).
+HLG_CONSTANTS = (0.17883277, 1 - 4 * 0.17883277, 0.5 - 0.17883277 * math.log(4 * 0.17883277))
+HLG_SYSTEM_GAMMA = 1.2
+HDR_FILTERS = ["format", "scale", "colorchannelmixer", "lutrgb"]
 # SMPTE ST 2084 (PQ): m1, m2, c1, c2, c3.
 PQ_CONSTANTS = (2610 / 16384, 2523 / 4096 * 128, 3424 / 4096, 2413 / 4096 * 32, 2392 / 4096 * 32)
-PQ_PIXEL_FORMATS = ["yuv420p10le", "yuva420p10le", "rgba64le", "rgb48le"]
+HDR_PIXEL_FORMATS = ["yuv420p10le", "yuva420p10le", "rgba64le", "rgb48le"]
 LABELLING_PATHS = [
     {
         "name": "mp4-h264-sdr",
@@ -2045,8 +2053,21 @@ LABELLING_PATHS = [
         "overlay_format": "yuv420p10", "codec_tags": ("hvc1", "hev1"), "muxer": "mp4",
         "audio": MP4_AUDIO, "subtitles": ("mov_text",),
         "preserves": ("tracks",),  # rotation and variable timing are not yet validated in HDR10: they stop
-        "needs": {"decoders": ["hevc"], "encoders": ["libx265"], "filters": RENDER_FILTERS + PQ_FILTERS,
-                  "pixel_formats": PQ_PIXEL_FORMATS, "muxers": ["mp4"]},
+        "needs": {"decoders": ["hevc"], "encoders": ["libx265"], "filters": RENDER_FILTERS + HDR_FILTERS,
+                  "pixel_formats": HDR_PIXEL_FORMATS, "muxers": ["mp4"]},
+    },
+    {
+        "name": "mp4-hevc-hlg",
+        "description": ("MP4 with an HEVC Main 10 video stream in HLG: 10-bit 4:2:0, BT.2020, HLG (ARIB STD-B67), "
+                        "limited range"),
+        "container": "mp4", "codec": "hevc", "codec_title": "HEVC Main 10", "encoder": "libx265", "quality": "CRF 14",
+        "encode": ["-preset", "medium", "-crf", "14"],
+        "dynamic_range": ("hlg",), "pix_fmts": ("yuv420p10le",), "colour": HLG_COLOUR, "signal": "hlg",
+        "overlay_format": "yuv420p10", "codec_tags": ("hvc1", "hev1"), "muxer": "mp4",
+        "audio": MP4_AUDIO, "subtitles": ("mov_text",),
+        "preserves": ("tracks",),  # rotation and variable timing are not yet validated in HLG: such videos stop
+        "needs": {"decoders": ["hevc"], "encoders": ["libx265"], "filters": RENDER_FILTERS + HDR_FILTERS,
+                  "pixel_formats": HDR_PIXEL_FORMATS, "muxers": ["mp4"]},
     },
 ]
 
@@ -2060,6 +2081,29 @@ def pq_signal(nits: float) -> float:
     m1, m2, c1, c2, c3 = PQ_CONSTANTS
     y = (nits / 10000) ** m1
     return ((c1 + c2 * y) / (1 + c3 * y)) ** m2
+
+
+def hlg_display(signal: float, gamma: float = HLG_SYSTEM_GAMMA) -> float:
+    """An HLG signal level of a grey as display light, 0 to 1 of the display's peak: the inverse OETF and the
+    system `gamma` (sdr_view applies it per channel)."""
+    a, b, c = HLG_CONSTANTS
+    scene = signal * signal / 3 if signal <= 0.5 else (math.exp((signal - c) / a) + b) / 12
+    return scene ** gamma
+
+
+def label_white_nits(path: dict, metadata: dict) -> float:
+    """The luminance, in cd/m2, at which the copy's display shows the Label's white. PQ: 203. HLG is relative
+    to the display, so on the mastering display's peak (else BT.2100's 1000 cd/m2 reference), with the
+    system gamma BT.2100 gives for that peak: 203 cd/m2 at 1000."""
+    if path["signal"] == "pq":
+        return REFERENCE_WHITE_NITS
+    peak = ratio(str((metadata.get("mastering_display") or {}).get("max_luminance") or 1000)) or 1000
+    return peak * hlg_display(HLG_REFERENCE_WHITE, HLG_SYSTEM_GAMMA + 0.42 * math.log10(peak / 1000))
+
+
+def label_white(path: dict) -> float:
+    """The signal level, 0 to 1, of the Label's white on an HDR path: reference white in its transfer."""
+    return pq_signal(REFERENCE_WHITE_NITS) if path["signal"] == "pq" else HLG_REFERENCE_WHITE
 
 
 def limited_code(signal: float) -> float:
@@ -2186,18 +2230,28 @@ def path_named(name: str) -> dict:
 # --- rendering ------------------------------------------------------------------
 
 def sdr_view(path: dict) -> str | None:
-    """For a PQ path, the filters that render a decoded frame for viewing on an SDR display, else None.
+    """For an HDR path, the filters that render a decoded frame for viewing on an SDR display, else None.
 
-    PQ BT.2020 code values to linear light relative to reference white (203 cd/m2 shows as SDR white),
-    highlights above 0.8 of it rolled off towards white (Reinhard on the excess), BT.2020 to BT.709
-    primaries in linear light, then the sRGB curve. Only these PNGs are tone-mapped; never the copy."""
-    if path.get("signal") != "pq":
+    BT.2020 code values to display light relative to reference white, which shows as SDR white: for PQ the
+    EOTF over 203 cd/m2; for HLG the inverse OETF and the system gamma 1.2 of a 1000 cd/m2 display, per
+    channel (BT.2100's OOTF applies the gamma to luminance; per channel is exact for greys), over 75% HLG.
+    Then highlights above 0.8 of reference white rolled off towards white (Reinhard on the excess), BT.2020
+    to BT.709 primaries in linear light, and the sRGB curve. Only these PNGs are tone-mapped; never the copy."""
+    if path.get("signal") not in ("pq", "hlg"):
         return None
-    m1, m2, c1, c2, c3 = PQ_CONSTANTS
     knee = 0.8
-    linear = (f"st(0,pow(val/maxval,{1 / m2:.8f}));"
-              f"st(1,pow(max(ld(0)-{c1:.8f},0)/({c2:.8f}-{c3:.8f}*ld(0)),{1 / m1:.8f})*{10000 / REFERENCE_WHITE_NITS:.6f});"
-              f"st(2,if(lte(ld(1),{knee}),ld(1),{knee}+{1 - knee:.2f}*(ld(1)-{knee})/(ld(1)-{knee}+{1 - knee:.2f})));"
+    if path["signal"] == "pq":
+        m1, m2, c1, c2, c3 = PQ_CONSTANTS
+        display = (f"st(0,pow(val/maxval,{1 / m2:.8f}));"
+                   f"st(1,pow(max(ld(0)-{c1:.8f},0)/({c2:.8f}-{c3:.8f}*ld(0)),{1 / m1:.8f})"
+                   f"*{10000 / REFERENCE_WHITE_NITS:.6f});")
+    else:
+        a, b, c = HLG_CONSTANTS
+        display = ("st(0,val/maxval);"
+                   f"st(1,pow(if(lte(ld(0),0.5),ld(0)*ld(0)/3,(exp((ld(0)-{c:.8f})/{a:.8f})+{b:.8f})/12),"
+                   f"{HLG_SYSTEM_GAMMA})/{hlg_display(HLG_REFERENCE_WHITE):.8f});")
+    linear = (display
+              + f"st(2,if(lte(ld(1),{knee}),ld(1),{knee}+{1 - knee:.2f}*(ld(1)-{knee})/(ld(1)-{knee}+{1 - knee:.2f})));"
               "clip(ld(2)*maxval,0,maxval)")
     srgb = "st(0,val/maxval);clip(maxval*if(lte(ld(0),0.0031308),12.92*ld(0),1.055*pow(ld(0),1/2.4)-0.055),0,maxval)"
     to_709 = ("rr=1.6605:rg=-0.5876:rb=-0.0728:gr=-0.1246:gg=1.1329:gb=-0.0083:"
@@ -2279,45 +2333,49 @@ COUNTER_ROTATIONS = {
 }
 
 
-def pq_label_filters() -> str:
-    """The Label's RGBA overlay mapped into the PQ signal: white to SDR reference white, black kept black, in
-    10-bit limited-range BT.2020 YUV. The Label is achromatic, so its grey levels need no gamut conversion."""
-    gain = f"{pq_signal(REFERENCE_WHITE_NITS):.5f}"
+def hdr_label_filters(path: dict) -> str:
+    """The Label's RGBA overlay mapped into the path's HDR signal, PQ or HLG: white to reference white
+    (label_white), black kept black, in 10-bit limited-range BT.2020 YUV. The Label is achromatic, so its
+    grey levels need no gamut conversion."""
+    gain = f"{label_white(path):.5f}"
     return (f"format=rgba64le,colorchannelmixer=rr={gain}:gg={gain}:bb={gain},"
             "scale=out_color_matrix=bt2020:out_range=tv,format=yuva420p10le,")
 
 
-def output_hdr_metadata(info: dict, plate_size: tuple, display: tuple) -> dict:
-    """The HDR10 metadata the Labelled Copy declares. The mastering display is the source's: the Label
-    changes no grading. The Label adds pixels at reference white, so MaxCLL becomes at least that; MaxFALL
-    may rise by at most the plate's share of the picture at that level, so it is raised by that bound
-    (never above MaxCLL). A level the source leaves unknown (0) stays unknown, and a source without content
-    light levels gets none."""
-    source = info["video"]["colour"]["hdr_metadata"]
-    out = {"mastering_display": source["mastering_display"]}
+def output_hdr_metadata(info: dict, path: dict, plate_size: tuple, display: tuple) -> dict:
+    """The static HDR metadata the Labelled Copy declares. The mastering display is the source's, when it
+    has one (HLG needs none): the Label changes no grading. The Label adds pixels at reference white
+    (label_white_nits), so MaxCLL becomes at least that; MaxFALL may rise by at most the plate's share of the
+    picture at that level, so it is raised by that bound (never above MaxCLL). A level the source leaves
+    unknown (0) stays unknown, and a source without content light levels gets none."""
+    source = info["video"]["colour"].get("hdr_metadata") or {}
+    out = {"mastering_display": source["mastering_display"]} if "mastering_display" in source else {}
     light = source.get("content_light")
     if light:
+        white = round(label_white_nits(path, source))
         max_cll, max_fall = int(light.get("max_content") or 0), int(light.get("max_average") or 0)
         if max_cll:
-            max_cll = max(max_cll, REFERENCE_WHITE_NITS)
+            max_cll = max(max_cll, white)
         if max_fall:
             share = plate_size[0] * plate_size[1] / (display[0] * display[1])
-            max_fall = math.ceil(max_fall + share * REFERENCE_WHITE_NITS)
+            max_fall = math.ceil(max_fall + share * white)
             max_fall = min(max_fall, max_cll) if max_cll else max_fall
         out["content_light"] = {"max_content": max_cll, "max_average": max_fall}
     return out
 
 
-def x265_hdr10_params(hdr: dict) -> str:
-    """x265's HDR10 SEI settings for the Labelled Copy's `hdr` metadata (output_hdr_metadata)."""
-    md = hdr["mastering_display"]
-
-    def units(key, scale):
-        return round(ratio(str(md[key])) * scale)
-    chroma = "".join(f"{name}({units(p + '_x', 50000)},{units(p + '_y', 50000)})"
-                     for name, p in (("G", "green"), ("B", "blue"), ("R", "red"), ("WP", "white_point")))
-    params = ["log-level=error", "hdr10=1",
-              f"master-display={chroma}L({units('max_luminance', 10000)},{units('min_luminance', 10000)})"]
+def x265_hdr_params(hdr: dict) -> str:
+    """x265's SEI settings for the Labelled Copy's `hdr` metadata (output_hdr_metadata): what it declares
+    and nothing else, so an HLG source without static metadata gets none."""
+    params = ["log-level=error"]
+    md = hdr.get("mastering_display")
+    if md:
+        def units(key, scale):
+            return round(ratio(str(md[key])) * scale)
+        chroma = "".join(f"{name}({units(p + '_x', 50000)},{units(p + '_y', 50000)})"
+                         for name, p in (("G", "green"), ("B", "blue"), ("R", "red"), ("WP", "white_point")))
+        params += ["hdr10=1",
+                   f"master-display={chroma}L({units('max_luminance', 10000)},{units('min_luminance', 10000)})"]
     light = hdr.get("content_light")
     if light:
         params.append(f"max-cll={light['max_content']},{light['max_average']}")
@@ -2328,7 +2386,7 @@ def render_command(tools: dict, info: dict, path: dict, overlay: Path, position:
                    enable: str | None, excerpt: tuple | None = None, hdr: dict | None = None) -> list:
     """The ffmpeg command for the Labelled Copy or, with `excerpt` (start, seconds on the playback
     timeline), a video-only excerpt of it rendered the same way and keeping the source's timestamps.
-    `hdr` is what an HDR10 copy declares and shows (draw_label), for a path with a PQ signal."""
+    `hdr` is what an HDR copy declares and shows (draw_label), for a path with an HDR signal (PQ or HLG)."""
     x, y = position
     turn, at_x, at_y = COUNTER_ROTATIONS[info["video"]["rotation"]]
     timing = f":enable='{enable}'" if enable else ""
@@ -2336,7 +2394,7 @@ def render_command(tools: dict, info: dict, path: dict, overlay: Path, position:
     untagged = [f"{name}=unknown" for key, name in SETPARAMS_NAMES.items()
                 if info["video"]["colour"].get(key) in (None, "unknown")]
     tags = f",setparams={':'.join(untagged)}" if untagged else ""
-    signal = pq_label_filters() if path.get("signal") == "pq" else ""
+    signal = hdr_label_filters(path) if path.get("signal") else ""
     # overlay converts both pictures to its `format`, 8-bit 4:2:0 by default: a 10-bit path names its own.
     blend = f":format={path['overlay_format']}" if path.get("overlay_format") else ""
     # Even sizes and positions: overlay rounds a subsampled picture's x and y down to even, which a
@@ -2359,7 +2417,7 @@ def render_command(tools: dict, info: dict, path: dict, overlay: Path, position:
     if info["video"].get("codec_tag") in path.get("codec_tags", ()):  # hvc1 or hev1, as the source has it
         argv += ["-tag:v", info["video"]["codec_tag"]]
     if hdr:  # explicit: otherwise libx265 copies the source's levels, which the Label may exceed
-        argv += ["-x265-params", x265_hdr10_params(hdr["metadata"])]
+        argv += ["-x265-params", x265_hdr_params(hdr["metadata"])]
     for key, option in COLOUR_OPTIONS:
         value = info["video"]["colour"].get(key)
         if value and value != "unknown":
@@ -2488,12 +2546,17 @@ def mastering_values(metadata: dict) -> dict:
 
 
 def hdr_checks(tools: dict, source: dict, out: dict, staged: Path, box: tuple, at: float, hdr: dict) -> list:
-    """HDR10 checks of the produced file: its declared metadata, and its decoded 10-bit picture."""
+    """HDR checks of the produced file: its declared static metadata, exactly what `hdr` expects (for HLG,
+    none unless the source has it), and its decoded 10-bit picture."""
     expected, found = hdr["metadata"], out["video"]["colour"].get("hdr_metadata") or {}
-    same = (mastering_values(found) == mastering_values(expected) and mastering_values(found)
-            and light_levels(found) == light_levels(expected))
-    checks = [check("hdr_metadata", same,
-                    f"mastering display {'kept' if mastering_values(found) == mastering_values(expected) else 'changed'}, "
+    display = mastering_values(found) == mastering_values(expected)
+    want = "the source's" if expected.get("mastering_display") else "none"
+    if display:
+        got = want
+    else:
+        got = "a different one" if found.get("mastering_display") else "none"
+    checks = [check("hdr_metadata", display and light_levels(found) == light_levels(expected),
+                    f"mastering display {got} (expected {want}), "
                     f"MaxCLL/MaxFALL {light_levels(found)} (expected {light_levels(expected)})")]
     width, height = source["video"]["width"], source["video"]["height"]
     before = planes_10bit(tools["ffmpeg"], Path(source["path"]), at, (width, height))
@@ -2636,10 +2699,11 @@ def draw_label(args: argparse.Namespace, plan: dict, work: Path) -> dict:
     x, y = (v - v % 2 for v in icon_position(args.corner, display, plate_size, margin))  # see render_command
     box = (x, y, x + plate_size[0], y + plate_size[1])
     hdr = None
-    if plan["path"].get("signal") == "pq":
-        hdr = {"metadata": output_hdr_metadata(plan["info"], plate_size, display), "pad": plan["pad"],
-               "plate_code": round(limited_code(pq_signal(REFERENCE_WHITE_NITS)) if colour == "black" else 64, 1),
-               "white_code": round(limited_code(pq_signal(REFERENCE_WHITE_NITS)), 1)}
+    if plan["path"].get("signal"):
+        white = round(limited_code(label_white(plan["path"])), 1)
+        hdr = {"metadata": output_hdr_metadata(plan["info"], plan["path"], plate_size, display),
+               "pad": plan["pad"],
+               "plate_code": white if colour == "black" else 64, "white_code": white}
     return {"colour": colour, "contrast": contrasts, "overlay": overlay, "position": (x, y), "box": box, "hdr": hdr,
             "enable": visibility_enable(plan["visibility"], plan["info"]),
             "settings": {
@@ -2649,6 +2713,27 @@ def draw_label(args: argparse.Namespace, plan: dict, work: Path) -> dict:
                 "plate_box": {"x": x, "y": y, "width": plate_size[0], "height": plate_size[1]},
                 "margin": margin, "visibility": plan["visibility"],
             }}
+
+
+UNVERIFIED_HDR = ("The checks measured the decoded 10-bit values; no HDR display was used, so how the copy looks "
+                  "in HDR is not verified, nor how a given player or platform shows it.")
+
+
+def hdr_report(path: dict, metadata: dict) -> dict:
+    """`video.hdr` of an HDR Labelled Copy: its profile, the Label's level, the metadata it declares."""
+    if path["signal"] == "pq":
+        return {"dynamic_range": "hdr10", "label_white_nits": REFERENCE_WHITE_NITS, "metadata": metadata,
+                "note": (f"The copy stays HDR10: 10-bit, BT.2020, PQ. The Label's white is at {REFERENCE_WHITE_NITS} "
+                         "cd/m2 (SDR reference white), its black at 0. The mastering display metadata is the "
+                         "source's; MaxCLL is at least the Label's white and MaxFALL was raised by the most the "
+                         "Label can add. " + UNVERIFIED_HDR)}
+    declared = ("It declares the source's static metadata, with content light levels raised for the Label."
+                if metadata else "Like the source, it declares no mastering display or content light levels.")
+    return {"dynamic_range": "hlg", "label_white_signal": HLG_REFERENCE_WHITE, "metadata": metadata,
+            "note": (f"The copy stays HLG: 10-bit, BT.2020, the HLG transfer (ARIB STD-B67), never converted to PQ "
+                     f"or SDR. The Label's white is at {HLG_REFERENCE_WHITE:.0%} of the HLG signal (HDR reference "
+                     f"white, {REFERENCE_WHITE_NITS} cd/m2 on a 1000 cd/m2 display), its black at 0. "
+                     f"{declared} " + UNVERIFIED_HDR)}
 
 
 def cmd_video_apply(args: argparse.Namespace) -> dict:
@@ -2702,15 +2787,7 @@ def cmd_video_apply(args: argparse.Namespace) -> dict:
                      f"({path['quality']}) to incorporate the Label, so the copy "
                      "is not bit-identical to the original. Audio and subtitle tracks were copied without "
                      "re-encoding."),
-            **({"hdr": {
-                "dynamic_range": "hdr10", "label_white_nits": REFERENCE_WHITE_NITS,
-                "metadata": label["hdr"]["metadata"],
-                "note": (f"The copy stays HDR10: 10-bit, BT.2020, PQ. The Label's white is at {REFERENCE_WHITE_NITS} "
-                         "cd/m2 (SDR reference white), its black at 0. The mastering display metadata is the "
-                         "source's; MaxCLL is at least the Label's white and MaxFALL was raised by the most the "
-                         "Label can add. The checks measured the decoded 10-bit values; no HDR display was used, "
-                         "so how the copy looks in HDR is not verified."),
-            }} if label["hdr"] else {}),
+            **({"hdr": hdr_report(path, label["hdr"]["metadata"])} if label["hdr"] else {}),
         },
         "validation": {"passed": True, "checks": checks},
     }
@@ -2734,13 +2811,23 @@ EXCERPT_NOTE = (
     "Excerpts carry the video only, without audio or subtitles."
 )
 
-HDR_PREVIEW_NOTE = (
-    "This is HDR10 video. The frames are SDR renderings, tone-mapped for viewing: reference white (203 cd/m2) "
-    "shows as near white and brighter highlights are compressed. They show content and layout for choosing a "
-    "corner, not how the video looks in HDR. The excerpts are HDR10 like the Labelled Copy, with the Label at "
-    "reference white; on an SDR display or player they don't show HDR appearance either. Only an HDR display "
-    "can, and the tool has not checked one."
-)
+HDR_PREVIEW_NOTES = {
+    "pq": (
+        "This is HDR10 video. The frames are SDR renderings, tone-mapped for viewing: reference white (203 cd/m2) "
+        "shows as near white and brighter highlights are compressed. They show content and layout for choosing a "
+        "corner, not how the video looks in HDR. The excerpts are HDR10 like the Labelled Copy, with the Label at "
+        "reference white; on an SDR display or player they don't show HDR appearance either. Only an HDR display "
+        "can, and the tool has not checked one."
+    ),
+    "hlg": (
+        "This is HLG video. The frames are SDR renderings, tone-mapped for viewing through the HLG curve: "
+        "reference white (75% HLG) shows as near white and brighter highlights are compressed. They show "
+        "content and layout for choosing a corner, not how the video looks in HDR. The excerpts are HLG like the "
+        "Labelled Copy, with the Label at reference white; an SDR display or player shows them with HLG's SDR "
+        "compatibility at best, not their HDR appearance. Only an HDR display can, and the tool has not checked "
+        "one."
+    ),
+}
 
 
 def preview_folder(args: argparse.Namespace, original: Path) -> Path:
@@ -2884,7 +2971,7 @@ def cmd_video_preview(args: argparse.Namespace) -> dict:
         "failed": len(failed),
         "excerpt_note": EXCERPT_NOTE,
         "sampling_note": SAMPLING_NOTE,
-        **({"hdr_note": HDR_PREVIEW_NOTE} if view else {}),
+        **({"hdr_note": HDR_PREVIEW_NOTES[plan["path"]["signal"]]} if view else {}),
     }
 
 
