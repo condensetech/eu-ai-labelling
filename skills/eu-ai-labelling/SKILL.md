@@ -35,7 +35,7 @@ When the user only asks whether a Label is required, answer as **Whether a Label
    - **Caption**: the Basic EU Icon and a text label below the image, in the document or page that shows it;
    - **Burn-in**: the EU Icon burned into a Labelled Copy.
 
-   When they already said how ("as a caption in post.md", "burn it in"), don't ask. For any other image, go on with burn-in; the preview (step 5 of `references/image.md`) lets the user switch to a caption. For a batch, ask once for every image it concerns. A **video** always carries the Label in its picture, Creative Work or not: don't offer it a caption, and skip this step for it (`references/video.md` settles its corner and when the Label shows). Done when the placement of each image is settled.
+   When they already said how ("as a caption in post.md", "burn it in"), don't ask. For any other image, go on with burn-in; the preview (step 5 of `references/image.md`) lets the user switch to a caption. For a batch, ask once for every image it concerns. A **video** always carries the Label in its picture, Creative Work or not: don't offer it a caption, and skip this step for it (`references/video.md` settles when the Label shows and its corner, chosen from frames and labelled excerpts of the video). Done when the placement of each image is settled.
 4. **Label it**, following the reference file for its content type:
    - Image, labelled with a **Caption**: read `references/creative-work.md`.
    - Image (any image file; the reference says which formats are refused), labelled by burn-in: read `references/image.md`.
@@ -44,7 +44,7 @@ When the user only asks whether a Label is required, answer as **Whether a Label
    - Markdown or HTML document: read `references/text.md`.
    - Site (a reusable label component for a React, Vue, Astro or plain HTML project): read `references/site.md`.
 
-   A Labelled Copy of an image inside the project then goes through `references/update-references.md`, as the image and batch references say; a video's goes through step 7 of `references/video.md`, without any alt-text change.
+   A Labelled Copy of an image inside the project then goes through `references/update-references.md`, as the image and batch references say; a video's goes through step 8 of `references/video.md`, without any alt-text change.
 
    Done when the reference file's own completion criterion is met.
 5. **Report** what the reference files you followed ask you to report: for an image the Labelled Copy's path and the parameters used, for a video what `references/video.md` asks, for a batch the summary in `references/batch.md`, and after a Labelled Copy inside the project the reference lists from `references/update-references.md`. Close with this note: "This is not legal advice. The plugin is not affiliated with the European Commission."

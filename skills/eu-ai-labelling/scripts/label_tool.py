@@ -2184,7 +2184,9 @@ COUNTER_ROTATIONS = {
 
 
 def render_command(tools: dict, info: dict, path: dict, overlay: Path, position: tuple, staged: Path,
-                   enable: str | None) -> list:
+                   enable: str | None, excerpt: tuple | None = None) -> list:
+    """The ffmpeg command for the Labelled Copy or, with `excerpt` (start, seconds on the playback
+    timeline), a video-only excerpt of it rendered the same way and keeping the source's timestamps."""
     x, y = position
     turn, at_x, at_y = COUNTER_ROTATIONS[info["video"]["rotation"]]
     timing = f":enable='{enable}'" if enable else ""
@@ -2199,7 +2201,8 @@ def render_command(tools: dict, info: dict, path: dict, overlay: Path, position:
              f"eof_action=repeat{timing}{tags}[labelled]")
     # -copyts keeps every timestamp, a start offset included; -fps_mode passthrough (below) keeps variable frame
     # timing. -noautorotate keeps the stored picture, whose display matrix carries through.
-    argv = [tools["ffmpeg"], "-nostdin", "-v", "error", "-y", "-copyts", "-noautorotate", "-i", info["path"],
+    trim = ["-ss", f"{excerpt[0]:.3f}", "-t", f"{excerpt[1]:.3f}"] if excerpt else []
+    argv = [tools["ffmpeg"], "-nostdin", "-v", "error", "-y", "-copyts", "-noautorotate", *trim, "-i", info["path"],
             "-i", overlay,
             "-filter_complex", graph, "-map", "[labelled]"]
     for out, stream in enumerate(info["audio"] + info["subtitles"], start=1):  # each track by name, never by default
@@ -2213,7 +2216,7 @@ def render_command(tools: dict, info: dict, path: dict, overlay: Path, position:
         if value and value != "unknown":
             argv += [option, value]
     argv += ["-c:a", "copy", "-c:s", "copy", "-fps_mode", "passthrough", "-map_metadata", "0",
-             "-f", path["muxer"], staged]
+             *(["-an", "-sn", "-dn"] if excerpt else []), "-f", path["muxer"], staged]
     return argv
 
 
@@ -2360,9 +2363,9 @@ def validate_output(tools: dict, source: dict, staged: Path, box: tuple, visible
     return checks
 
 
-def cmd_video_apply(args: argparse.Namespace) -> dict:
-    import tempfile
-
+def label_plan(args: argparse.Namespace) -> dict:
+    """Everything checked before rendering, shared by `video-apply` and `video-preview`: the video's
+    labelling path, the Label's geometry on the video as displayed, and the effective visibility."""
     original = Path(args.video)
     if is_labelled_copy(original):
         raise LabelToolError("labelled_copy", f"{original} is a Labelled Copy: pass the original video.")
@@ -2377,7 +2380,6 @@ def cmd_video_apply(args: argparse.Namespace) -> dict:
             + " Nothing was written. Ask the user how to proceed.",
             issues=support["issues"],
         )
-    path = path_named(support["path"])
     video = info["video"]
     display = (video["display_width"], video["display_height"])
     icon_height, margin = icon_geometry(display, args.size)
@@ -2388,24 +2390,52 @@ def cmd_video_apply(args: argparse.Namespace) -> dict:
             "image_too_small",
             f"The video is {display[0]}x{display[1]}: too small for a {probe_icon.width}x{probe_icon.height} px "
             f"icon on its backing plate with a {margin} px margin.")
-    footprint = plated(probe_icon.size, pad)
+    duration = info["container"]["duration"] or 0
+    return {"original": original, "tools": tools, "info": info, "path": path_named(support["path"]),
+            "display": display, "icon_height": icon_height, "margin": margin, "pad": pad,
+            "footprint": plated(probe_icon.size, pad), "duration": duration,
+            "visibility": resolve_visibility(args, duration)}
+
+
+def draw_label(args: argparse.Namespace, plan: dict, work: Path) -> dict:
+    """The Label as `video-apply` incorporates it: Icon Colour, overlay PNG and position."""
+    tools, original, display, margin = plan["tools"], plan["original"], plan["display"], plan["margin"]
+    if args.colour == AUTO:
+        frames = [extract_frame(tools["ffmpeg"], original, t, work / f"sample-{i}.png")
+                  for i, t in enumerate(sample_times(plan["duration"]))]
+        colour, contrasts = choose_colour(frames, args.corner, display, plan["footprint"], margin)
+    else:
+        colour, contrasts = args.colour, None
+    overlay, plate_size, icon_px = label_overlay(args.variant, colour, plan["icon_height"], plan["pad"],
+                                                 work / "label.png")
+    x, y = (v - v % 2 for v in icon_position(args.corner, display, plate_size, margin))  # see render_command
+    return {"colour": colour, "contrast": contrasts, "overlay": overlay, "position": (x, y),
+            "box": (x, y, x + plate_size[0], y + plate_size[1]),
+            "enable": visibility_enable(plan["visibility"], plan["info"]),
+            "settings": {
+                "variant": args.variant, "corner": args.corner, "colour": colour, "plate": True,
+                "contrast": contrasts,
+                "icon": {"x": x + plan["pad"], "y": y + plan["pad"], "width": icon_px[0], "height": icon_px[1]},
+                "plate_box": {"x": x, "y": y, "width": plate_size[0], "height": plate_size[1]},
+                "margin": margin, "visibility": plan["visibility"],
+            }}
+
+
+def cmd_video_apply(args: argparse.Namespace) -> dict:
+    import tempfile
+
+    plan = label_plan(args)
+    original, tools, info, path = plan["original"], plan["tools"], plan["info"], plan["path"]
+    video, display, duration, visibility = info["video"], plan["display"], plan["duration"], plan["visibility"]
     target = labelled_copy_path(original)
     staged = target.with_name(f".{target.name}.{os.getpid()}.tmp")
-    duration = info["container"]["duration"] or 0
-    visibility = resolve_visibility(args, duration)
     with tempfile.TemporaryDirectory(prefix="eu-ai-labelling-") as work:
         work = Path(work)
-        if args.colour == AUTO:
-            frames = [extract_frame(tools["ffmpeg"], original, t, work / f"sample-{i}.png")
-                      for i, t in enumerate(sample_times(duration))]
-            colour, contrasts = choose_colour(frames, args.corner, display, footprint, margin)
-        else:
-            colour, contrasts = args.colour, None
-        overlay, plate_size, icon_px = label_overlay(args.variant, colour, icon_height, pad, work / "label.png")
-        x, y = (v - v % 2 for v in icon_position(args.corner, display, plate_size, margin))  # see render_command
-        box = (x, y, x + plate_size[0], y + plate_size[1])
+        label = draw_label(args, plan, work)
+        box = label["box"]
         try:
-            proc = run_tool(render_command(tools, info, path, overlay, (x, y), staged, visibility_enable(visibility, info)))
+            proc = run_tool(render_command(tools, info, path, label["overlay"], label["position"], staged,
+                                           label["enable"]))
             if proc.returncode != 0 or not staged.is_file():
                 detail = (proc.stderr or "").strip().splitlines()[-3:]
                 raise LabelToolError("render_failed",
@@ -2432,15 +2462,7 @@ def cmd_video_apply(args: argparse.Namespace) -> dict:
     return {
         "labelled_copy": str(target),
         "original": str(original),
-        "variant": args.variant,
-        "corner": args.corner,
-        "colour": colour,
-        "plate": True,
-        "contrast": contrasts,
-        "icon": {"x": x + pad, "y": y + pad, "width": icon_px[0], "height": icon_px[1]},
-        "plate_box": {"x": x, "y": y, "width": plate_size[0], "height": plate_size[1]},
-        "margin": margin,
-        "visibility": visibility,
+        **label["settings"],
         "path": path["name"],
         "video": {
             "container": info["container"]["format"], "codec": video["codec"],
@@ -2452,6 +2474,167 @@ def cmd_video_apply(args: argparse.Namespace) -> dict:
                      "re-encoding."),
         },
         "validation": {"passed": True, "checks": checks},
+    }
+
+
+# --- previews -------------------------------------------------------------------
+
+PREVIEW_SUFFIX = ".label-preview"
+PREVIEW_FRAMES = 5
+PREVIEW_SAMPLE = re.compile(r"frame-\d{2,}-\d+\.\d{2}s\.png|excerpt-\d{2,}-\d+\.\d{2}-\d+\.\d{2}s\.[A-Za-z0-9]+")
+EXCERPT_S = 3.0  # an excerpt of continuous display
+EXCERPT_LEAD_S = 1.0  # hidden time kept either side of a periodic window
+EXCERPT_EDGE_S = 2.0  # visible time kept at each end of a long periodic window
+SAMPLING_NOTE = (
+    "These frames and excerpts are samples: they cannot show that the Label covers no face, text, subtitle "
+    "or main subject in every frame of the video. Only watching the full Labelled Copy can."
+)
+EXCERPT_NOTE = (
+    "Each excerpt is rendered as video-apply renders the Labelled Copy with these settings: the same Icon "
+    "Variant, Icon Colour, size, position, backing plate and visibility timing, on the source's timestamps. "
+    "Excerpts carry the video only, without audio or subtitles."
+)
+
+
+def preview_folder(args: argparse.Namespace, original: Path) -> Path:
+    """Where previews go: `--out`, or `<name>.<ext>.label-preview` next to the video. Never a file,
+    the original or its Labelled Copy."""
+    out = Path(args.out) if args.out else original.with_name(original.name + PREVIEW_SUFFIX)
+    if out.resolve() in (original.resolve(), labelled_copy_path(original).resolve()) or is_labelled_copy(out):
+        raise LabelToolError("usage", f"--out {out} is the video or a Labelled Copy: choose a folder for previews.")
+    if out.exists() and not out.is_dir():
+        raise LabelToolError("usage", f"--out {out} is a file: choose a folder for previews.")
+    return out
+
+
+def merged(spans: list) -> list:
+    out = []
+    for start, end in sorted(spans):
+        if out and start <= out[-1][1]:
+            out[-1][1] = max(out[-1][1], end)
+        else:
+            out.append([start, end])
+    return out
+
+
+def excerpt_spans(visibility: dict, duration: float) -> list:
+    """Playback spans for the excerpts. Continuous display: the start, middle and end. Periodic display:
+    the first, second and last windows, each with hidden time either side, so that every excerpt shows
+    the Label and its appearing or disappearing."""
+    if visibility["mode"] != "periodic":
+        length = min(EXCERPT_S, duration)
+        middle = max(0.0, duration / 2 - length / 2)
+        spans = [(0.0, length), (middle, middle + length), (duration - length, duration)]
+    else:
+        window, every = visibility["window"], visibility["every"]
+        last = int(max(duration - 1e-3, 0) // every)
+        spans = []
+        for k in sorted({0, min(1, last), last}):
+            start, end = k * every, min(k * every + window, duration)
+            before, after = max(0.0, start - EXCERPT_LEAD_S), min(duration, end + EXCERPT_LEAD_S)
+            if end - start <= 2 * EXCERPT_EDGE_S:
+                spans.append((before, after))
+            else:
+                spans += [(before, start + EXCERPT_EDGE_S), (end - EXCERPT_EDGE_S, after)]
+    return [(round(a, 3), round(b, 3)) for a, b in merged(spans) if b > a]
+
+
+def visible_spans(visibility: dict, start: float, end: float) -> list:
+    """The parts of [start, end] in which the Label shows."""
+    if visibility["mode"] != "periodic":
+        return [[start, end]]
+    window, every = visibility["window"], visibility["every"]
+    spans, k = [], int(start // every)
+    while k * every < end:
+        a, b = max(start, k * every), min(end, k * every + window)
+        if b > a:
+            spans.append([round(a, 3), round(b, 3)])
+        k += 1
+    return spans
+
+
+def render_excerpt(plan: dict, label: dict, span: tuple, target: Path) -> int:
+    """Render one excerpt as `video-apply` renders the whole video; return its decoded frame count."""
+    info, tools = plan["info"], plan["tools"]
+    # `-ss` counts from the container's start, the playback timeline from the first video frame.
+    lead = (info["video"]["start_time"] or 0) - (info["container"]["start_time"] or 0)
+    staged = target.with_name(f".{target.name}.{os.getpid()}.tmp")
+    try:
+        proc = run_tool(render_command(tools, info, plan["path"], label["overlay"], label["position"], staged,
+                                       label["enable"], excerpt=(span[0] + lead, span[1] - span[0])),
+                        timeout=TOOL_TIMEOUT_S * 10)
+        if proc.returncode != 0 or not staged.is_file():
+            detail = (proc.stderr or "").strip().splitlines()[-1:] or ["no output"]
+            raise LabelToolError("render_failed", f"ffmpeg could not render the excerpt: {detail[0]}")
+        decoded = len(packet_times(tools["ffprobe"], staged, 0))
+        if not decoded:
+            raise LabelToolError("render_failed", "The rendered excerpt holds no video frame.")
+        os.replace(staged, target)
+        return decoded
+    finally:
+        try:
+            staged.unlink(missing_ok=True)
+        except OSError:
+            pass
+
+
+def sample_failure(exc: Exception) -> str:
+    return exc.message if isinstance(exc, LabelToolError) else f"Cannot write the sample: {exc}"
+
+
+def cmd_video_preview(args: argparse.Namespace) -> dict:
+    import tempfile
+
+    if args.frames < 1:
+        raise LabelToolError("usage", f"--frames must be at least 1, not {args.frames}.")
+    plan = label_plan(args)
+    original, tools, duration, visibility = plan["original"], plan["tools"], plan["duration"], plan["visibility"]
+    out = preview_folder(args, original)
+    try:
+        out.mkdir(parents=True, exist_ok=True)
+        for old in out.iterdir():  # an earlier preview's samples, by the exact names it writes
+            if PREVIEW_SAMPLE.fullmatch(old.name) and old.is_file():
+                old.unlink()
+    except OSError as exc:
+        raise LabelToolError("write_failed", f"Cannot write previews to {out}: {exc}")
+    frames, excerpts = [], []
+    with tempfile.TemporaryDirectory(prefix="eu-ai-labelling-") as work:
+        work = Path(work)
+        label = draw_label(args, plan, work)
+        for i, at in enumerate(sample_times(duration, args.frames), 1):
+            target = out / f"frame-{i:02d}-{at:.2f}s.png"
+            try:
+                extract_frame(tools["ffmpeg"], original, at, target)
+                frames.append({"time": at, "path": str(target), "status": "written"})
+            except (LabelToolError, OSError) as exc:
+                target.unlink(missing_ok=True)
+                frames.append({"time": at, "path": None, "status": "failed", "error": sample_failure(exc)})
+        for i, (start, end) in enumerate(excerpt_spans(visibility, duration), 1):
+            target = out / f"excerpt-{i:02d}-{start:.2f}-{end:.2f}s{original.suffix}"
+            entry = {"start": start, "end": end, "label_visible": visible_spans(visibility, start, end)}
+            try:
+                decoded = render_excerpt(plan, label, (start, end), target)
+                entry |= {"path": str(target), "status": "written", "decoded_frames": decoded}
+            except (LabelToolError, OSError) as exc:
+                entry |= {"path": None, "status": "failed", "error": sample_failure(exc)}
+            excerpts.append(entry)
+    failed = [e for e in frames + excerpts if e["status"] == "failed"]
+    if len(failed) == len(frames) + len(excerpts):
+        raise LabelToolError("preview_failed",
+                             f"No preview of {original.name} could be made: {failed[0]['error']} "
+                             "Nothing was checked; the original and any previous Labelled Copy are unchanged.",
+                             frames=frames, excerpts=excerpts)
+    return {
+        "original": str(original),
+        "out": str(out),
+        **label["settings"],
+        "path": plan["path"]["name"],
+        "frames": frames,
+        "excerpts": excerpts,
+        "complete": not failed,
+        "failed": len(failed),
+        "excerpt_note": EXCERPT_NOTE,
+        "sampling_note": SAMPLING_NOTE,
     }
 
 
@@ -2535,24 +2718,36 @@ def build_parser() -> argparse.ArgumentParser:
     inspect.add_argument("video")
     inspect.set_defaults(handler=cmd_video_inspect)
 
+    def label_options(command):  # the same Label settings for video-apply and video-preview
+        command.add_argument("video")
+        command.add_argument("--variant", required=True, choices=VARIANTS)
+        command.add_argument("--corner", default="tr", choices=CORNERS)
+        command.add_argument("--colour", default=AUTO, choices=(AUTO, *COLOURS),
+                             help="the Icon Colour; the backing plate is the opposite colour (default: the better "
+                                  "contrast over sampled frames)")
+        command.add_argument("--size", type=int,
+                             help="icon height in px (default: 6%% of the shorter side as displayed)")
+        command.add_argument("--visibility", default=AUTO, choices=VISIBILITY_MODES,
+                             help="when the Label shows: continuous, periodic, or auto: continuous up to "
+                                  "--threshold seconds, periodic beyond it (default: auto)")
+        command.add_argument("--window", type=float, default=DEFAULT_WINDOW_S,
+                             help="periodic: seconds the Label shows each time (default: %(default)g)")
+        command.add_argument("--every", type=float, default=DEFAULT_EVERY_S,
+                             help="periodic: seconds between the starts of two windows (default: %(default)g)")
+        command.add_argument("--threshold", type=float, default=DEFAULT_THRESHOLD_S,
+                             help="auto: the longest video, in seconds, shown continuously (default: %(default)g)")
+
     vapply = sub.add_parser("video-apply", help="Write a Labelled Copy of a video.")
-    vapply.add_argument("video")
-    vapply.add_argument("--variant", required=True, choices=VARIANTS)
-    vapply.add_argument("--corner", default="tr", choices=CORNERS)
-    vapply.add_argument("--colour", default=AUTO, choices=(AUTO, *COLOURS),
-                        help="the Icon Colour; the backing plate is the opposite colour (default: the better "
-                             "contrast over sampled frames)")
-    vapply.add_argument("--size", type=int, help="icon height in px (default: 6%% of the shorter side as displayed)")
-    vapply.add_argument("--visibility", default=AUTO, choices=VISIBILITY_MODES,
-                        help="when the Label shows: continuous, periodic, or auto: continuous up to --threshold "
-                             "seconds, periodic beyond it (default: auto)")
-    vapply.add_argument("--window", type=float, default=DEFAULT_WINDOW_S,
-                        help="periodic: seconds the Label shows each time (default: %(default)g)")
-    vapply.add_argument("--every", type=float, default=DEFAULT_EVERY_S,
-                        help="periodic: seconds between the starts of two windows (default: %(default)g)")
-    vapply.add_argument("--threshold", type=float, default=DEFAULT_THRESHOLD_S,
-                        help="auto: the longest video, in seconds, shown continuously (default: %(default)g)")
+    label_options(vapply)
     vapply.set_defaults(handler=cmd_video_apply)
+
+    vpreview = sub.add_parser("video-preview", help="Write source frames and labelled excerpts of a video, to "
+                                                    "choose the Label's corner before video-apply.")
+    label_options(vpreview)
+    vpreview.add_argument("--out", help="the folder for the previews (default: <video>.label-preview next to it)")
+    vpreview.add_argument("--frames", type=int, default=PREVIEW_FRAMES,
+                          help="source frames to write, spread over the video (default: %(default)s)")
+    vpreview.set_defaults(handler=cmd_video_preview)
 
     return parser
 

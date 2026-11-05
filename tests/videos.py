@@ -185,6 +185,39 @@ def variable_rate_mp4(path: Path, rates: tuple = (30, 10, 24), size: str = "160x
     return path
 
 
+QUADRANTS = {"tl": (0, 0), "tr": (1, 0), "bl": (0, 1), "br": (1, 1)}
+
+
+def corner_scenes(path: Path, corners: tuple = ("tr", "bl", "br"), seconds_each: float = 1, size: str = "320x180",
+                  rate: int = 25) -> Path:
+    """A grey video in scenes of `seconds_each`: scene i has a white block filling the quarter of the
+    picture at `corners[i]`, standing in for a face or a subtitle that competes for that corner."""
+    width, height = map(int, size.split("x"))
+    boxes = []
+    for i, corner in enumerate(corners):
+        qx, qy = QUADRANTS[corner]
+        start, end = i * seconds_each, (i + 1) * seconds_each
+        boxes.append(f"drawbox=x={qx * width // 2}:y={qy * height // 2}:w={width // 2}:h={height // 2}:"
+                     f"color=white:t=fill:enable='gte(t,{start})*lt(t,{end})'")
+    seconds = seconds_each * len(corners)
+    ffmpeg("-f", "lavfi", "-i", f"color=c=0x606060:s={size}:r={rate}:d={seconds}", "-vf", ",".join(boxes),
+           "-c:v", "libx264", "-pix_fmt", "yuv420p", path)
+    return path
+
+
+def white_quadrant(image: Image.Image) -> str | None:
+    """The corner whose quarter of `image` is (almost all) white, or None."""
+    from PIL import ImageStat
+
+    grey = image.convert("L")
+    width, height = grey.size
+    for corner, (qx, qy) in QUADRANTS.items():
+        box = (qx * width // 2 + 4, qy * height // 2 + 4, (qx + 1) * width // 2 - 4, (qy + 1) * height // 2 - 4)
+        if ImageStat.Stat(grey.crop(box)).mean[0] > 230:
+            return corner
+    return None
+
+
 # --- Fake tools on PATH ----------------------------------------------------------
 
 def tool_env(bin_dir: Path) -> dict:

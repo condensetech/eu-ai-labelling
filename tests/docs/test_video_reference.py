@@ -7,6 +7,7 @@ wrappers, as in tests/unit/test_video_tools.py.
 from __future__ import annotations
 
 import os
+import re
 import subprocess
 
 import pytest
@@ -124,7 +125,7 @@ PLAYER = """\
 
 
 def test_the_references_step_runs_as_written_on_the_approved_copy(tmp_path):
-    """Step 7's command, after step 4's: the player's source points to the
+    """Step 8's command, after step 5's: the player's source points to the
     Labelled Copy, and nothing else on the page changes: no alt text, no
     disclosure, the track and the download link stay."""
     project = tmp_path / "site"
@@ -200,6 +201,60 @@ def test_the_reference_does_not_imply_every_codec_in_mov_or_webm():
     assert "ProRes" in listed and "AV1" in listed
     assert "never converted to MP4" in listed
     assert "from the file itself, not its name" in listed
+
+
+@pytest.mark.parametrize("visibility, timing", [("auto", []), ("periodic", ["--window", "0.5", "--every", "1"])])
+def test_the_preview_command_runs_as_written(tmp_path, visibility, timing):
+    video = flat_mp4(tmp_path / "clip.mp4", seconds=3, size="640x360")
+    argv = doc_command("video.md", "video-preview", {"<video>": str(video), "<generated|modified>": "generated",
+                                                     "<tl|tr|bl|br>": "tr", "<auto|continuous|periodic>": visibility})
+
+    code, result = run_doc(argv + timing, tmp_path, real_tools(tmp_path / "bin"))
+
+    assert code == 0, result
+    assert result["out"] == str(tmp_path / "clip.mp4.label-preview")
+    assert result["complete"] is True
+    assert all(os.path.isfile(e["path"]) for e in result["frames"] + result["excerpts"])
+    assert result["visibility"]["requested"] == visibility
+    assert not (tmp_path / "clip.ai-label.mp4").exists(), "a preview writes no Labelled Copy"
+
+
+def test_the_corner_is_chosen_from_the_previews_before_applying():
+    text = VIDEO_MD.read_text()
+    steps = re.findall(r"^\d\. \*\*([^*]+)\*\*", text, re.M)
+    assert steps.index("Choose when the Label shows.") < steps.index("Preview and choose the corner.")
+    assert steps.index("Preview and choose the corner.") < steps.index("Apply the Label.")
+    preview = step(text, "Preview and choose the corner")
+    assert "Open every written frame" in preview
+    for interference in ("faces", "text", "subtitles", "main subject"):
+        assert interference in preview
+    assert "in every frame" in preview and "never plan to move it between scenes" in preview
+    assert "**ask the user** which corner to use, and wait" in preview
+    assert "never call it checked" in preview and "`preview_failed`" in preview
+    assert "run `video-preview` again" in preview
+
+
+def test_approval_says_what_previews_do_and_do_not_establish():
+    approval = step(VIDEO_MD.read_text(), "Show it for approval")
+    assert "`sampling_note`" in approval and "in every frame" in approval
+    assert "the full Labelled Copy is what they approve" in approval
+    assert "run step 4 again" in approval and "`size_too_small`" in approval
+
+
+def test_the_cross_references_point_to_the_named_steps():
+    text = VIDEO_MD.read_text()
+    numbers = {title: int(n) for n, title in re.findall(r"^(\d)\. \*\*([^*.]+)", text, re.M)}
+    assert numbers["Choose when the Label shows"] == 3 and "**periodic**): step 3" in text
+    assert numbers["Preview and choose the corner"] == 4 and "the last preview (step 4)" in text
+    assert numbers["When it can't be labelled as it is"] == 7 and "as step 7 says" in text
+    assert numbers["Point the project's players to it"] == 8
+    assert "goes through step 8 of `references/video.md`" in SKILL_MD.read_text()
+
+
+def test_the_readme_explains_previews():
+    videos = section((REPO_ROOT / "README.md").read_text(), "Videos")
+    assert "label-preview" in videos and "never moves during playback" in videos
+    assert "can't prove the Label is clear in every frame" in videos
 
 
 def test_the_reference_says_what_to_do_about_a_missing_capability():
