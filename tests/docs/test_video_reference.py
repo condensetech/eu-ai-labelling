@@ -59,3 +59,33 @@ def test_the_reference_never_installs_tools_itself():
 def test_the_skill_routes_local_videos_and_keeps_urls_out():
     identify = step(SKILL_MD.read_text(), "Identify the content")
     assert "video" in identify and "URL" in identify and "live stream" in identify
+
+
+def test_the_apply_command_runs_as_written(tmp_path):
+    video = flat_mp4(tmp_path / "clip.mp4", size="640x360")
+    argv = doc_command("video.md", "video-apply", {"<video>": str(video), "<generated|modified>": "generated",
+                                                   "<tl|tr|bl|br>": "tr"})
+
+    code, result = run_doc(argv, tmp_path, real_tools(tmp_path / "bin"))
+
+    assert code == 0, result
+    assert result["labelled_copy"] == str(tmp_path / "clip.ai-label.mp4")
+
+
+def test_the_reference_lists_exactly_the_validated_paths(tmp_path):
+    from helpers import section
+
+    _, report = run_doc(doc_command("video.md", "video-tools", {}), tmp_path, real_tools(tmp_path / "bin"))
+    listed = section(VIDEO_MD.read_text(), "What can be labelled")
+
+    import re
+    assert set(re.findall(r"\*\*`([a-z0-9-]+)`\*\*", listed)) == {p["name"] for p in report["paths"]}
+
+
+def test_videos_never_go_through_image_reference_updates_yet():
+    assert "Don't run `references` or any alt-text update for a video" in VIDEO_MD.read_text()
+
+
+def test_a_creative_work_video_gets_no_caption():
+    third = step(SKILL_MD.read_text(), "Settle where an image's Label goes")
+    assert "video" in third and "don't offer it a caption" in third

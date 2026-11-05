@@ -25,7 +25,7 @@ When the user only asks whether a Label is required, answer as **Whether a Label
 2. **Settle the Icon Variant.** It says how AI was involved, which only the user knows for sure:
    - The user named the variant ("fully AI-generated", "AI-modified"): use it as given. **Fully AI-Generated** maps to `generated`, **Partially AI-Modified** to `modified`.
    - Otherwise answer from context first: what the user said about the content, or that you made it yourself in this session. The name of an AI tool alone ("made with Midjourney", "ChatGPT helped") doesn't say which: these tools both create and edit. If context doesn't say, ask one plain question: did AI create it from scratch, or edit something that already existed (a real photo, a text a person wrote)? From scratch is **Fully AI-Generated**; an edit of something real is **Partially AI-Modified**. Wait for the answer before labelling (for a batch, ask it with the batch's other questions, as **A batch of files** says).
-   - **Basic** is for documents and sites only: an image can't be labelled with it. When the user names "basic" for an image, ask whether the image is fully AI-generated or AI-modified, then use **Fully AI-Generated** or **Partially AI-Modified** as named, once they answer.
+   - **Basic** is for documents and sites only: an image or a video can't be labelled with it. When the user names "basic" for an image or a video, ask whether it is fully AI-generated or AI-modified, then use **Fully AI-Generated** or **Partially AI-Modified** as named, once they answer.
    - For a Markdown or HTML document the icon is always **Basic**; the answer sets only the wording: "fully AI-generated" (or "AI-generated", "written by AI") is `generated`, "partially AI-modified" (or "AI-modified", "edited with AI") is `modified`. If they named only "basic", ask whether the text was generated or modified.
    - For a **site** the component always shows the **Basic** icon, with a text label passed in per use: skip this step and step 3.
    - For a **batch**, see **A batch of files** below.
@@ -35,7 +35,7 @@ When the user only asks whether a Label is required, answer as **Whether a Label
    - **Caption**: the Basic EU Icon and a text label below the image, in the document or page that shows it;
    - **Burn-in**: the EU Icon burned into a Labelled Copy.
 
-   When they already said how ("as a caption in post.md", "burn it in"), don't ask. For any other image, go on with burn-in; the preview (step 5 of `references/image.md`) lets the user switch to a caption. For a batch, ask once for every image it concerns. Done when the placement of each image is settled.
+   When they already said how ("as a caption in post.md", "burn it in"), don't ask. For any other image, go on with burn-in; the preview (step 5 of `references/image.md`) lets the user switch to a caption. For a batch, ask once for every image it concerns. A **video** always carries the Label in its picture, Creative Work or not: don't offer it a caption, and skip this step for it (`references/video.md` settles its corner). Done when the placement of each image is settled.
 4. **Label it**, following the reference file for its content type:
    - Image, labelled with a **Caption**: read `references/creative-work.md`.
    - Image (any image file; the reference says which formats are refused), labelled by burn-in: read `references/image.md`.
@@ -44,10 +44,10 @@ When the user only asks whether a Label is required, answer as **Whether a Label
    - Markdown or HTML document: read `references/text.md`.
    - Site (a reusable label component for a React, Vue, Astro or plain HTML project): read `references/site.md`.
 
-   A Labelled Copy inside the project then goes through `references/update-references.md`, as the image and batch references say.
+   A Labelled Copy of an image inside the project then goes through `references/update-references.md`, as the image and batch references say.
 
    Done when the reference file's own completion criterion is met.
-5. **Report** what the reference files you followed ask you to report: for an image the Labelled Copy's path and the parameters used, for a batch the summary in `references/batch.md`, and after a Labelled Copy inside the project the reference lists from `references/update-references.md`. Close with this note: "This is not legal advice. The plugin is not affiliated with the European Commission."
+5. **Report** what the reference files you followed ask you to report: for an image the Labelled Copy's path and the parameters used, for a video what `references/video.md` asks, for a batch the summary in `references/batch.md`, and after a Labelled Copy inside the project the reference lists from `references/update-references.md`. Close with this note: "This is not legal advice. The plugin is not affiliated with the European Commission."
 
 ## Whether a Label is required
 

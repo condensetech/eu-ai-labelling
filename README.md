@@ -59,6 +59,12 @@ The agent looks at the image and puts the icon in the top-right corner when that
 
 PNG, JPEG and WebP are supported; the Labelled Copy keeps the original's colour profile and EXIF metadata, and JPEGs are re-encoded at high quality. Animated GIF or WebP, SVG images and other formats are refused.
 
+### Videos
+
+`label clip.mp4 as fully AI-generated` writes `clip.ai-label.mp4` next to the original, with the EU Icon on an opaque backing plate in a fixed corner (top-right unless you ask for another) for the whole video. The original file is left untouched. The copy keeps the container, codec, dimensions, frame timing and duration of the original, and copies its audio without re-encoding; the video stream itself is re-encoded to incorporate the Label, so the copy is not bit-identical. Before the copy replaces a previous one, the tool decodes it and checks what it kept.
+
+This version labels MP4 files with H.264 video in SDR, up to 60 seconds, with at most one audio track. Any other video (another codec, HDR, more tracks, rotation, a variable frame rate) stops before anything is written, and the agent asks you how to proceed: nothing is converted or dropped silently.
+
 ### Text
 
 Markdown and HTML documents are labelled in place: `/eu-ai-labelling label article.md as fully AI-generated` adds, below the headline, the Basic "AI" EU Icon, a short text label in the document's own language (e.g. "Generato con IA" for an Italian article) and a hidden `<!-- eu-ai-labelling: generated -->` marker. HTML gets the icon as an accessible inline SVG; Markdown gets an image reference to the official SVG, copied into the project's assets folder. If only part of a document is AI-made, say which part and only that part is labelled.

@@ -207,11 +207,16 @@ def test_image_labelling_works_without_ffmpeg(tmp_path, label_tool):
     assert Path(applied.json["labelled_copy"]).is_file()
 
 
-def test_rendering_is_not_claimed_before_a_validated_path(tmp_path, label_tool):
-    video = flat_mp4(tmp_path / "clip.mp4")
+def test_inspect_names_the_validated_path_for_a_simple_mp4(tmp_path, label_tool):
+    video = flat_mp4(tmp_path / "clip.mp4", audio=True)
 
-    result = label_tool("video-apply", video, "--variant", "generated", env=real_tools(tmp_path / "bin"))
+    result = label_tool("video-inspect", video, env=real_tools(tmp_path / "bin"))
 
-    assert result.returncode != 0
-    assert result.json["error"]["code"] == "video_not_supported_yet"
-    assert sorted(p.name for p in tmp_path.iterdir()) == ["bin", "clip.mp4"]
+    assert result.json["labelling"] == {"supported": True, "path": "mp4-h264-sdr", "issues": []}
+
+
+def test_the_tools_list_validated_paths_and_whether_this_build_has_them(tmp_path, label_tool):
+    result = label_tool("video-tools", env=real_tools(tmp_path / "bin"))
+
+    path = next(p for p in result.json["paths"] if p["name"] == "mp4-h264-sdr")
+    assert path["validated"] is True and path["available"] is True and path["missing"] == []

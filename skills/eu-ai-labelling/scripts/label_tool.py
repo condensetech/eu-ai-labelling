@@ -154,10 +154,11 @@ AUTO = "auto"
 
 
 class LabelToolError(Exception):
-    def __init__(self, code: str, message: str):
+    def __init__(self, code: str, message: str, **details):
         super().__init__(message)
         self.code = code
         self.message = message
+        self.details = details  # extra fields of the JSON error, such as `issues`
 
 
 def emit(payload: dict) -> None:
@@ -1884,9 +1885,24 @@ def cmd_video_inspect(args: argparse.Namespace) -> dict:
 
 # --- labelling paths --------------------------------------------------------------
 
-# The labelling paths this tool has validated end to end. A video outside
-# them stops for a user decision; it is never converted silently.
-LABELLING_PATHS: list = []
+# The labelling paths this tool has validated end to end, each with a real
+# input and decoded-output test. A video outside them stops for a user
+# decision; it is never converted silently. Audio and subtitles are copied,
+# never re-encoded, so a path lists the codecs its container carries.
+MP4_AUDIO = ("aac", "mp3", "alac", "ac3", "eac3", "opus", "flac")
+LABELLING_PATHS = [
+    {
+        "name": "mp4-h264-sdr",
+        "description": "MP4 with an H.264 video stream in SDR, 8-bit 4:2:0, 4:2:2 or 4:4:4",
+        "container": "mp4", "codec": "h264", "dynamic_range": ("sdr",),
+        "pix_fmts": ("yuv420p", "yuvj420p", "yuv422p", "yuv444p"),
+        "encoder": "libx264", "encode": ["-preset", "medium", "-crf", "16"], "muxer": "mp4",
+        "audio": MP4_AUDIO, "subtitles": ("mov_text",),
+        "needs": {"decoders": ["h264"], "encoders": ["libx264"], "filters": ["overlay"], "muxers": ["mp4"]},
+    },
+]
+# What this version can render beyond the path itself.
+MAX_CONTINUOUS_S = 60.0
 
 
 def labelling_path_status(path: dict, found: dict) -> dict:
@@ -1896,19 +1912,324 @@ def labelling_path_status(path: dict, found: dict) -> dict:
             "available": not missing, "missing": missing}
 
 
+def issue(code: str, message: str) -> dict:
+    return {"code": code, "message": message}
+
+
+def matching_path(info: dict) -> tuple[dict | None, list]:
+    """The validated path for this video, or None and why there is none."""
+    container, video = info["container"]["format"], info["video"]
+    for_container = [p for p in LABELLING_PATHS if p["container"] == container]
+    if not for_container:
+        known = sorted({p["container"].upper() for p in LABELLING_PATHS})
+        return None, [issue("container_not_validated",
+                            f"{container.upper()} files have no validated labelling path (validated: "
+                            f"{', '.join(known)}).")]
+    for_codec = [p for p in for_container if p["codec"] == video["codec"]]
+    if not for_codec:
+        codecs = sorted({p["codec"] for p in for_container})
+        return None, [issue("codec_not_validated",
+                            f"Its video codec, {video['codec']}, has no validated labelling path in "
+                            f"{container.upper()} (validated: {', '.join(codecs)}). Labelling it would mean "
+                            f"converting the video to another codec.")]
+    dynamic = video["colour"]["dynamic_range"]
+    for_range = [p for p in for_codec if dynamic in p["dynamic_range"]]
+    if not for_range:
+        return None, [issue("hdr_not_validated",
+                            f"It is {dynamic.upper()} video, and no validated path keeps {dynamic.upper()} for "
+                            f"{video['codec']} in {container.upper()}. It won't be converted to SDR.")]
+    for path in for_range:
+        if video["pix_fmt"] in path["pix_fmts"]:
+            return path, []
+    return None, [issue("pixel_format_not_validated",
+                        f"Its pixel format, {video['pix_fmt']}, has no validated labelling path "
+                        f"(validated: {', '.join(for_range[0]['pix_fmts'])}).")]
+
+
+def stream_issues(info: dict, path: dict) -> list:
+    """Streams and characteristics the path can't carry through unchanged."""
+    found = []
+    if len(info["audio"]) > 1 or info["subtitles"] or info["other_streams"]:
+        found.append(issue("additional_tracks",
+                           "It has more than one audio track, or subtitle or other tracks: this version labels "
+                           "videos with one video stream and at most one audio track, and won't drop the others."))
+    for audio in info["audio"][:1]:
+        if audio["codec"] not in path["audio"]:
+            found.append(issue("audio_not_validated",
+                               f"Its audio codec, {audio['codec']}, can't be copied into {path['container'].upper()} "
+                               f"unchanged: it would have to be converted."))
+    video = info["video"]
+    if video["rotation"]:
+        found.append(issue("rotation_not_validated",
+                           f"It is stored rotated by {video['rotation']} degrees, which this version doesn't label."))
+    if not video["constant_frame_rate"]:
+        found.append(issue("variable_frame_rate_not_validated",
+                           "Its frames are not evenly spaced (variable frame rate), which this version doesn't "
+                           "label without normalising the timing."))
+    duration = info["container"]["duration"] or 0
+    if duration > MAX_CONTINUOUS_S:
+        found.append(issue("too_long",
+                           f"It lasts {duration:.1f} s: this version labels videos up to {MAX_CONTINUOUS_S:.0f} s."))
+    return found
+
+
+def capability_issues(path: dict, found: dict) -> list:
+    status = labelling_path_status(path, found)
+    if status["available"]:
+        return []
+    return [issue("capability_missing",
+                  f"This FFmpeg build lacks what the {path['name']} path needs: {', '.join(status['missing'])}.")]
+
+
 def labelling_support(info: dict, tools: dict) -> dict:
-    return {"supported": False, "issues": [{
-        "code": "renderer_not_available",
-        "message": "This version inspects videos but cannot label them yet: no validated rendering path exists.",
-    }]}
+    path, issues = matching_path(info)
+    if path:
+        issues = stream_issues(info, path) + capability_issues(path, tool_capabilities(tools["ffmpeg"])["_all"])
+    return {"supported": path is not None and not issues, "path": path["name"] if path else None, "issues": issues}
+
+
+def path_named(name: str) -> dict:
+    return next(p for p in LABELLING_PATHS if p["name"] == name)
+
+
+# --- rendering ------------------------------------------------------------------
+
+def extract_frame(ffmpeg: str, video: Path, at: float, target: Path) -> Path:
+    """The frame shown at `at` seconds into playback, as displayed (rotation applied), as PNG."""
+    proc = run_tool([ffmpeg, "-nostdin", "-v", "error", "-y", "-ss", f"{at:.3f}", "-i", video,
+                     "-frames:v", "1", "-f", "image2", "-c:v", "png", target], timeout=TOOL_TIMEOUT_S * 4)
+    if proc.returncode != 0 or not target.is_file():
+        detail = (proc.stderr or "").strip().splitlines()[-1:] or ["no frame decoded"]
+        raise LabelToolError("frame_extraction_failed", f"Cannot decode the frame at {at:.2f} s: {detail[0]}")
+    return target
+
+
+def sample_times(duration: float, count: int = 5) -> list:
+    """Evenly spread times inside the video, away from its very end."""
+    duration = max(duration, 0.04)
+    return [round(duration * (i + 0.5) / count, 3) for i in range(count)]
+
+
+def choose_colour(frames: list, corner: str, display: tuple, footprint: tuple, margin: int) -> tuple[str, dict]:
+    """The Icon Colour whose worst contrast over the sampled frames is the higher."""
+    from PIL import Image
+
+    worst = {"black": float("inf"), "white": float("inf")}
+    region = corner_region(corner, display, footprint, margin)
+    for frame in frames:
+        with Image.open(frame) as image:
+            judged = judge_contrast(image.convert("RGB").crop(region))
+        for colour in worst:
+            worst[colour] = min(worst[colour], judged[colour])
+    colour = "black" if worst["black"] >= worst["white"] else "white"
+    return colour, {c: round(v, 2) for c, v in worst.items()}
+
+
+def label_overlay(variant: str, colour: str, icon_height: int, pad: int, target: Path) -> tuple[Path, tuple, tuple]:
+    """The Label as one RGBA PNG: the icon on its opaque rounded backing plate.
+
+    Returns the PNG, the plate's size and the icon's size."""
+    from PIL import Image, ImageDraw
+
+    icon = render_icon(variant, colour, icon_height)
+    size = plated(icon.size, pad)
+    overlay = Image.new("RGBA", size, (0, 0, 0, 0))
+    ImageDraw.Draw(overlay).rounded_rectangle((0, 0, size[0] - 1, size[1] - 1), radius=pad,
+                                              fill=PLATE_COLOURS[colour])
+    overlay.alpha_composite(icon, (pad, pad))
+    overlay.save(target)
+    return target, size, icon.size
+
+
+COLOUR_OPTIONS = (("primaries", "-color_primaries"), ("transfer", "-color_trc"),
+                  ("matrix", "-colorspace"), ("range", "-color_range"))
+
+
+def render_command(tools: dict, info: dict, path: dict, overlay: Path, position: tuple, staged: Path,
+                   enable: str | None) -> list:
+    x, y = position
+    timing = f":enable='{enable}'" if enable else ""
+    graph = f"[0:{info['video']['index']}][1:v]overlay=x={x}:y={y}:eof_action=repeat{timing}[labelled]"
+    argv = [tools["ffmpeg"], "-nostdin", "-v", "error", "-y", "-i", info["path"], "-i", overlay,
+            "-filter_complex", graph, "-map", "[labelled]"]
+    for stream in info["audio"] + info["subtitles"]:
+        argv += ["-map", f"0:{stream['index']}"]
+    argv += ["-c:v", path["encoder"], *path["encode"], "-pix_fmt", info["video"]["pix_fmt"]]
+    for key, option in COLOUR_OPTIONS:
+        value = info["video"]["colour"].get(key)
+        if value and value != "unknown":
+            argv += [option, value]
+    argv += ["-c:a", "copy", "-c:s", "copy", "-fps_mode", "passthrough", "-map_metadata", "0",
+             "-f", path["muxer"], staged]
+    return argv
+
+
+# --- output validation ----------------------------------------------------------
+
+TIME_TOLERANCE_S = 0.002
+
+
+def check(name: str, passed: bool, detail: str) -> dict:
+    return {"check": name, "passed": bool(passed), "detail": detail}
+
+
+def label_region_check(tools: dict, source: Path, labelled: Path, at: float, box: tuple, work: Path) -> dict:
+    """Decode the same frame of both files: the Label region must change, the rest only by re-encoding noise."""
+    from PIL import Image, ImageChops, ImageStat
+
+    before = extract_frame(tools["ffmpeg"], source, at, work / "check-source.png")
+    after = extract_frame(tools["ffmpeg"], labelled, at, work / "check-labelled.png")
+    with Image.open(before) as a, Image.open(after) as b:
+        a, b = a.convert("RGB"), b.convert("RGB")
+        if a.size != b.size:
+            return check("label_region", False, f"frame sizes differ: {a.size} and {b.size}")
+        diff = ImageChops.difference(a, b).convert("L")
+        inside = ImageStat.Stat(diff.crop(box)).mean[0]
+        mask = Image.new("L", diff.size, 255)
+        mask.paste(0, box)
+        outside = ImageStat.Stat(diff, mask).mean[0]
+    return check("label_region", inside > 20 and outside < 4,
+                 f"mean change {inside:.1f} inside the Label, {outside:.2f} outside it, at {at:.2f} s")
+
+
+def compare_streams(name: str, before: list, after: list, keys: tuple) -> dict:
+    left = [{k: s.get(k) for k in keys} for s in before]
+    right = [{k: s.get(k) for k in keys} for s in after]
+    return check(name, left == right, f"{len(after)} kept" if left == right else f"source {left}, copy {right}")
+
+
+def validate_output(tools: dict, source: dict, staged: Path, box: tuple, visible_at: float, work: Path) -> list:
+    """Checks of the produced file itself, independent of the checks before rendering."""
+    out = inspect_video(staged, tools)
+    src_v, out_v = source["video"], out["video"]
+    checks = [
+        check("container", out["container"]["format"] == source["container"]["format"],
+              f"{out['container']['format']}"),
+        check("video_codec", out_v["codec"] == src_v["codec"], f"{out_v['codec']}"),
+        check("dimensions", (out_v["display_width"], out_v["display_height"])
+              == (src_v["display_width"], src_v["display_height"]),
+              f"{out_v['display_width']}x{out_v['display_height']} as displayed"),
+        check("pixel_format", out_v["pix_fmt"] == src_v["pix_fmt"], f"{out_v['pix_fmt']}"),
+        check("colour", all(out_v["colour"].get(k) == src_v["colour"].get(k)
+                            for k in ("primaries", "transfer", "matrix", "range", "dynamic_range")),
+              f"{ {k: out_v['colour'].get(k) for k in ('primaries', 'transfer', 'matrix', 'range')} }"),
+        check("frame_count", out_v["frames"] == src_v["frames"], f"{out_v['frames']} frames"),
+    ]
+    src_times = packet_times(tools["ffprobe"], Path(source["path"]), src_v["index"])
+    out_times = packet_times(tools["ffprobe"], staged, out_v["index"])
+    if src_times and out_times and len(src_times) == len(out_times):
+        shift = [round(b - out_times[0] - (a - src_times[0]), 6) for a, b in zip(src_times, out_times)]
+        drift = max(abs(s) for s in shift)
+        checks.append(check("frame_timing", drift <= TIME_TOLERANCE_S, f"largest frame time shift {drift * 1000:.2f} ms"))
+    else:
+        checks.append(check("frame_timing", False, "frame times could not be compared"))
+    src_d, out_d = source["container"]["duration"] or 0, out["container"]["duration"] or 0
+    frame_s = 1 / (ratio(src_v["average_frame_rate"]) or 25)
+    checks.append(check("duration", abs(out_d - src_d) <= max(0.05, frame_s), f"{out_d:.3f} s (source {src_d:.3f} s)"))
+    keys = ("codec", "channels", "sample_rate", "language", "disposition")
+    checks.append(compare_streams("audio_tracks", source["audio"], out["audio"], keys))
+    checks.append(compare_streams("subtitle_tracks", source["subtitles"], out["subtitles"],
+                                  ("codec", "language", "disposition", "title")))
+
+    def offset(info, stream):  # a track's start relative to the video's: audio/video sync
+        return (stream.get("start_time") or 0) - (info["video"]["start_time"] or 0)
+    sync = [abs(offset(out, b) - offset(source, a)) for a, b in zip(source["audio"], out["audio"])]
+    if sync:
+        checks.append(check("audio_sync", max(sync) <= TIME_TOLERANCE_S, f"largest shift {max(sync) * 1000:.2f} ms"))
+    checks.append(label_region_check(tools, Path(source["path"]), staged, visible_at, box, work))
+    return checks
 
 
 def cmd_video_apply(args: argparse.Namespace) -> dict:
-    raise LabelToolError(
-        "video_not_supported_yet",
-        "Video labelling is not available yet: this version can check the FFmpeg tools and inspect a video, "
-        "but has no validated way to produce a Labelled Copy of it.",
-    )
+    import tempfile
+
+    original = Path(args.video)
+    if is_labelled_copy(original):
+        raise LabelToolError("labelled_copy", f"{original} is a Labelled Copy: pass the original video.")
+    tools = require_video_tools()
+    info = inspect_video(original, tools)
+    support = info["labelling"]
+    if not support["supported"]:
+        raise LabelToolError(
+            "preservation_unsupported",
+            f"{original.name} can't be labelled without losing or converting something: "
+            + " ".join(i["message"] for i in support["issues"])
+            + " Nothing was written. Ask the user how to proceed.",
+            issues=support["issues"],
+        )
+    path = path_named(support["path"])
+    video = info["video"]
+    display = (video["display_width"], video["display_height"])
+    icon_height, margin = icon_geometry(display, args.size)
+    probe_icon = fitted_icon(args.variant, display, icon_height, margin)
+    pad = plate_padding(display, probe_icon.size, margin)
+    if pad is None:
+        raise LabelToolError(
+            "image_too_small",
+            f"The video is {display[0]}x{display[1]}: too small for a {probe_icon.width}x{probe_icon.height} px "
+            f"icon on its backing plate with a {margin} px margin.")
+    footprint = plated(probe_icon.size, pad)
+    target = labelled_copy_path(original)
+    staged = target.with_name(f".{target.name}.{os.getpid()}.tmp")
+    duration = info["container"]["duration"] or 0
+    with tempfile.TemporaryDirectory(prefix="eu-ai-labelling-") as work:
+        work = Path(work)
+        if args.colour == AUTO:
+            frames = [extract_frame(tools["ffmpeg"], original, t, work / f"sample-{i}.png")
+                      for i, t in enumerate(sample_times(duration))]
+            colour, contrasts = choose_colour(frames, args.corner, display, footprint, margin)
+        else:
+            colour, contrasts = args.colour, None
+        overlay, plate_size, icon_px = label_overlay(args.variant, colour, icon_height, pad, work / "label.png")
+        x, y = icon_position(args.corner, display, plate_size, margin)
+        box = (x, y, x + plate_size[0], y + plate_size[1])
+        try:
+            proc = run_tool(render_command(tools, info, path, overlay, (x, y), staged, None))
+            if proc.returncode != 0 or not staged.is_file():
+                detail = (proc.stderr or "").strip().splitlines()[-3:]
+                raise LabelToolError("render_failed",
+                                     f"ffmpeg could not render {target.name}: {' '.join(detail) or 'no output'}. "
+                                     "The original and any previous Labelled Copy are unchanged.")
+            checks = validate_output(tools, info, staged, box, min(0.5, duration / 2), work)
+            failed = [c for c in checks if not c["passed"]]
+            if failed:
+                raise LabelToolError(
+                    "output_validation_failed",
+                    f"The rendered copy did not keep the source's characteristics: "
+                    + "; ".join(f"{c['check']}: {c['detail']}" for c in failed)
+                    + ". It was discarded; the original and any previous Labelled Copy are unchanged.",
+                    checks=checks)
+            os.replace(staged, target)
+        except OSError as exc:
+            raise LabelToolError("write_failed", f"Cannot write {target}: {exc}")
+        finally:
+            try:
+                staged.unlink(missing_ok=True)
+            except OSError:
+                pass
+    return {
+        "labelled_copy": str(target),
+        "original": str(original),
+        "variant": args.variant,
+        "corner": args.corner,
+        "colour": colour,
+        "plate": True,
+        "contrast": contrasts,
+        "icon": {"x": x + pad, "y": y + pad, "width": icon_px[0], "height": icon_px[1]},
+        "plate_box": {"x": x, "y": y, "width": plate_size[0], "height": plate_size[1]},
+        "margin": margin,
+        "visibility": {"mode": "continuous"},
+        "path": path["name"],
+        "video": {
+            "container": info["container"]["format"], "codec": video["codec"],
+            "width": display[0], "height": display[1], "duration": duration,
+            "re_encoded": True, "encoder": path["encoder"],
+            "note": (f"The video stream was re-encoded with {path['encoder']} to incorporate the Label, so the copy "
+                     "is not bit-identical to the original. Audio and subtitle tracks were copied without "
+                     "re-encoding."),
+        },
+        "validation": {"passed": True, "checks": checks},
+    }
 
 
 class JsonArgumentParser(argparse.ArgumentParser):
@@ -1994,6 +2315,11 @@ def build_parser() -> argparse.ArgumentParser:
     vapply = sub.add_parser("video-apply", help="Write a Labelled Copy of a video.")
     vapply.add_argument("video")
     vapply.add_argument("--variant", required=True, choices=VARIANTS)
+    vapply.add_argument("--corner", default="tr", choices=CORNERS)
+    vapply.add_argument("--colour", default=AUTO, choices=(AUTO, *COLOURS),
+                        help="the Icon Colour; the backing plate is the opposite colour (default: the better "
+                             "contrast over sampled frames)")
+    vapply.add_argument("--size", type=int, help="icon height in px (default: 6%% of the shorter side as displayed)")
     vapply.set_defaults(handler=cmd_video_apply)
 
     return parser
@@ -2005,7 +2331,7 @@ def main(argv: list[str] | None = None) -> int:
         emit(args.handler(args))
         return 0
     except LabelToolError as exc:
-        emit({"error": {"code": exc.code, "message": exc.message}})
+        emit({"error": {"code": exc.code, "message": exc.message, **exc.details}})
         return 1
     except Exception as exc:  # any other failure still honours the JSON contract
         emit({"error": {"code": "internal", "message": f"{type(exc).__name__}: {exc}"}})
