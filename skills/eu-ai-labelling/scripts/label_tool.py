@@ -1500,6 +1500,417 @@ def apply_references(positions: list, root: Path, mentions: dict, wording: str |
     return {"applied": applied, "alt_updated": alt_updated, "alt_unchanged": alt_unchanged, "needs_hand_edit": hand}
 
 
+# --- video: FFmpeg tools, inspection and Labelled Copies -------------------------
+
+# Video work uses an existing FFmpeg installation (ffmpeg and ffprobe), never
+# one the plugin installs. Image, text and site work never look for it.
+VIDEO_TOOLS = ("ffmpeg", "ffprobe")
+VIDEO_SUFFIXES = {".mp4", ".m4v", ".mov", ".webm", ".mkv", ".avi", ".wmv", ".flv", ".mpg", ".mpeg", ".ts", ".3gp"}
+TOOL_TIMEOUT_S = 30
+# Test hook: report and look up tools as on another platform. The lookup is
+# then simulated on this machine; the result says so.
+PLATFORM_OVERRIDE = "LABEL_TOOL_PLATFORM"
+
+INSTALL_AFTER = (
+    "Once installed, reopen the terminal and the application running the skill, check that "
+    "`ffmpeg -version` and `ffprobe -version` both work there, then ask again: the tools are checked again "
+    "before any video is processed."
+)
+INSTALL_GUIDANCE = {
+    "windows": [
+        "Install FFmpeg (it provides ffmpeg and ffprobe) with WinGet, in PowerShell: "
+        "`winget install --id Gyan.FFmpeg.Essentials --exact --source winget`.",
+        "Without WinGet: download `ffmpeg-release-essentials.zip` from https://www.gyan.dev/ffmpeg/builds/#release-builds, "
+        "extract it to a permanent folder and add its `bin` folder to your user Path "
+        "(Settings > System > About > Advanced system settings > Environment Variables).",
+    ],
+    "macos": [
+        "Install FFmpeg with Homebrew: `brew install ffmpeg`.",
+        "Without Homebrew: download a build linked from https://ffmpeg.org/download.html and put the folder holding "
+        "ffmpeg and ffprobe on your PATH.",
+    ],
+    "linux": [
+        "Install FFmpeg from your distribution: `sudo apt install ffmpeg` (Debian, Ubuntu), "
+        "`sudo dnf install ffmpeg` (Fedora, with RPM Fusion enabled) or `sudo pacman -S ffmpeg` (Arch).",
+        "Or download a static build linked from https://ffmpeg.org/download.html and put the folder holding "
+        "ffmpeg and ffprobe on your PATH.",
+    ],
+}
+INSTALL_NOTE = (
+    "The plugin never installs or downloads FFmpeg itself. These instructions are not validated on every "
+    "platform; follow your platform's own documentation when they differ."
+)
+
+# Capabilities a video path may need, reported by `video-tools`. Having one is
+# not a validated labelling path: `paths` says which paths are validated.
+CAPABILITY_NAMES = {
+    "decoders": ("h264", "hevc", "vp8", "vp9", "av1", "prores", "aac", "mp3", "opus", "vorbis", "flac",
+                 "pcm_s16le", "pcm_s24le", "mov_text", "webvtt"),
+    "encoders": ("libx264", "libx265", "libvpx", "libvpx-vp9", "libsvtav1", "libaom-av1", "prores_ks"),
+    "filters": ("overlay", "format", "scale", "select", "showinfo"),
+    "pixel_formats": ("yuv420p", "yuv422p", "yuv444p", "yuv420p10le", "yuv422p10le", "yuv444p10le", "rgba"),
+    "muxers": ("mp4", "mov", "webm"),
+}
+
+
+def current_platform() -> tuple[str, bool]:
+    """('windows' | 'macos' | 'linux', simulated)."""
+    override = os.environ.get(PLATFORM_OVERRIDE)
+    if override:
+        return override, True
+    if sys.platform.startswith("win"):
+        return "windows", False
+    return ("macos" if sys.platform == "darwin" else "linux"), False
+
+
+def find_executable(name: str, platform: str) -> Path | None:
+    """The first `name` on PATH. On Windows, through PATHEXT (`ffmpeg.exe`)."""
+    if platform == "windows":
+        extensions = [e for e in os.environ.get("PATHEXT", ".COM;.EXE;.BAT;.CMD").split(";") if e]
+        names = [name + e.lower() for e in extensions] + [name + e.upper() for e in extensions]
+    else:
+        names = [name]
+    for folder in os.environ.get("PATH", "").split(os.pathsep):
+        for candidate in names:
+            path = Path(folder) / candidate
+            if path.is_file() and (platform == "windows" or os.access(path, os.X_OK)):
+                return path
+    return None
+
+
+def check_tool(name: str, platform: str) -> dict:
+    """`available`, `missing` or `unusable` (found, but `-version` fails)."""
+    import subprocess
+
+    path = find_executable(name, platform)
+    if path is None:
+        return {"status": "missing", "path": None, "message": f"{name} is not on PATH."}
+    try:
+        proc = subprocess.run([str(path), "-version"], capture_output=True, text=True, timeout=TOOL_TIMEOUT_S)
+    except (OSError, subprocess.SubprocessError) as exc:
+        return {"status": "unusable", "path": str(path), "message": f"{name} cannot run: {exc}"}
+    first = (proc.stdout or "").splitlines()[:1]
+    if proc.returncode != 0 or not first or not first[0].startswith(f"{name} version"):
+        detail = (proc.stderr or proc.stdout or "").strip().splitlines()[-1:] or ["no version printed"]
+        return {"status": "unusable", "path": str(path),
+                "message": f"{name} -version failed (exit {proc.returncode}): {detail[0]}"}
+    return {"status": "available", "path": str(path), "version": first[0].split()[2]}
+
+
+def listed_names(ffmpeg: str, option: str) -> set:
+    """Names listed by `ffmpeg -<option>` (encoders, decoders, filters, pix_fmts, muxers)."""
+    import subprocess
+
+    out = subprocess.run([ffmpeg, "-hide_banner", f"-{option}"], capture_output=True, text=True,
+                         timeout=TOOL_TIMEOUT_S).stdout
+    names = set()
+    body = out.split("---", 1)[-1] if "---" in out else out
+    for line in body.splitlines():
+        parts = line.split()
+        if len(parts) < 2:
+            continue
+        if option == "pix_fmts":
+            names.add(parts[1])
+        elif option == "muxers":
+            if "E" in parts[0]:
+                names.update(parts[1].split(","))
+        else:
+            names.add(parts[1])
+    return names
+
+
+def tool_capabilities(ffmpeg: str) -> dict:
+    found = {kind: listed_names(ffmpeg, option) for kind, option in
+             (("decoders", "decoders"), ("encoders", "encoders"), ("filters", "filters"),
+              ("pixel_formats", "pix_fmts"), ("muxers", "muxers"))}
+    return {kind: {n: n in found[kind] for n in names} for kind, names in CAPABILITY_NAMES.items()} | {
+        "_all": found}
+
+
+def video_tools_report() -> dict:
+    platform, simulated = current_platform()
+    tools = {name: check_tool(name, platform) for name in VIDEO_TOOLS}
+    ready = all(t["status"] == "available" for t in tools.values())
+    report = {"ready": ready, "platform": platform, "tools": tools}
+    if simulated:
+        report["simulated"] = True
+    if ready:
+        capabilities = tool_capabilities(tools["ffmpeg"]["path"])
+        found = capabilities.pop("_all")
+        report["capabilities"] = capabilities
+        report["paths"] = [labelling_path_status(p, found) for p in LABELLING_PATHS]
+        report["note"] = (
+            "`capabilities` lists what this FFmpeg build has: a capability is not a validated labelling path. "
+            "`paths` lists the labelling paths this tool has validated, and whether this build has what each needs. "
+            "Every output is still checked after rendering."
+        )
+    else:
+        report["install"] = {"platform": platform, "simulated": simulated, "steps": INSTALL_GUIDANCE[platform],
+                             "after": INSTALL_AFTER, "note": INSTALL_NOTE}
+    return report
+
+
+def cmd_video_tools(args: argparse.Namespace) -> dict:
+    return video_tools_report()
+
+
+def require_video_tools() -> dict:
+    """The tools' paths, or `video_tools_missing` with what to do."""
+    platform, _ = current_platform()
+    tools = {name: check_tool(name, platform) for name in VIDEO_TOOLS}
+    unavailable = [f"{n} is {t['status']} ({t['message']})" for n, t in tools.items() if t["status"] != "available"]
+    if unavailable:
+        raise LabelToolError(
+            "video_tools_missing",
+            "Video labelling needs FFmpeg's ffmpeg and ffprobe: " + "; ".join(unavailable)
+            + ". Run `video-tools` for installation steps for this platform, ask the user to install them, "
+              "and check again. Images, documents and sites can still be labelled without them.",
+        )
+    return {n: t["path"] for n, t in tools.items()}
+
+
+# --- inspection -----------------------------------------------------------------
+
+def run_tool(argv: list, timeout: int | None = None):
+    import subprocess
+
+    return subprocess.run([str(a) for a in argv], capture_output=True, text=True, timeout=timeout)
+
+
+def ratio(value: str | None) -> float | None:
+    if not value or value in ("0/0", "N/A"):
+        return None
+    num, _, den = value.partition("/")
+    try:
+        return float(num) / float(den or 1)
+    except (ValueError, ZeroDivisionError):
+        return None
+
+
+def number(value) -> float | None:
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def ebml_doctype(path: Path) -> str | None:
+    """`webm` or `matroska`, read from the file's EBML header, else None."""
+    with path.open("rb") as handle:
+        head = handle.read(64)
+    if not head.startswith(b"\x1a\x45\xdf\xa3"):
+        return None
+    at = head.find(b"\x42\x82")
+    if at < 0:
+        return None
+    size = head[at + 2] & 0x7F  # a one-byte EBML size: 0x80 | length
+    return head[at + 3: at + 3 + size].decode("ascii", "ignore")
+
+
+def container_format(path: Path, format_name: str, tags: dict) -> str:
+    """mp4, mov, webm, matroska or what ffprobe calls it: from the file, not its name."""
+    names = format_name.split(",")
+    if "mov" in names or "mp4" in names:
+        brand = (tags.get("major_brand") or "").strip()
+        return "mov" if brand == "qt" else "mp4"
+    if "matroska" in names or "webm" in names:
+        return "webm" if ebml_doctype(path) == "webm" else "matroska"
+    return names[0]
+
+
+PIX_FMT_DEPTH = re.compile(r"p(\d{2})(?:le|be)$")
+
+
+def bit_depth(pix_fmt: str | None) -> int | None:
+    if not pix_fmt:
+        return None
+    match = PIX_FMT_DEPTH.search(pix_fmt)
+    return int(match.group(1)) if match else 8
+
+
+def rotation_of(stream: dict) -> int:
+    for data in stream.get("side_data_list", []) or []:
+        if "rotation" in data:
+            return int(round(float(data["rotation"]))) % 360
+    rotate = (stream.get("tags") or {}).get("rotate")
+    return int(rotate) % 360 if rotate else 0
+
+
+def dynamic_range(stream: dict, frame_side_data: list) -> str:
+    """sdr, hdr10, hlg, or an HDR profile this tool has not validated: hdr10plus, dolby_vision, other_hdr."""
+    kinds = [d.get("side_data_type", "") for d in (stream.get("side_data_list") or [])] + frame_side_data
+    if any("DOVI" in k or "Dolby Vision" in k for k in kinds):
+        return "dolby_vision"
+    transfer = stream.get("color_transfer")
+    if any("SMPTE2094-40" in k or "HDR10+" in k for k in kinds):
+        return "hdr10plus"
+    if transfer == "smpte2084":
+        return "hdr10"
+    if transfer == "arib-std-b67":
+        return "hlg"
+    if (stream.get("color_primaries") == "bt2020" or (bit_depth(stream.get("pix_fmt")) or 8) > 8) and transfer not in (
+            None, "bt709", "bt601", "smpte170m", "bt470bg", "iec61966-2-1", "bt2020-10", "bt2020-12"):
+        return "other_hdr"
+    return "sdr"
+
+
+def first_frame_side_data(ffprobe: str, path: Path) -> list:
+    proc = run_tool([ffprobe, "-v", "error", "-select_streams", "v:0", "-read_intervals", "%+#1",
+                     "-show_entries", "frame=side_data_list", "-of", "json", path], timeout=TOOL_TIMEOUT_S * 4)
+    try:
+        frames = json.loads(proc.stdout or "{}").get("frames", [])
+    except json.JSONDecodeError:
+        return []
+    found = []
+    for frame in frames[:1]:
+        for data in frame.get("side_data_list", []) or []:
+            found.append(data.get("side_data_type", ""))
+    return found
+
+
+def hdr_metadata(ffprobe: str, path: Path) -> dict:
+    """Mastering display and content light levels of the first frame, as ffprobe reports them."""
+    proc = run_tool([ffprobe, "-v", "error", "-select_streams", "v:0", "-read_intervals", "%+#1",
+                     "-show_entries", "frame=side_data_list", "-of", "json", path], timeout=TOOL_TIMEOUT_S * 4)
+    try:
+        frames = json.loads(proc.stdout or "{}").get("frames", [])
+    except json.JSONDecodeError:
+        return {}
+    found = {}
+    for data in (frames[0].get("side_data_list", []) if frames else []) or []:
+        kind = data.get("side_data_type", "")
+        if kind == "Mastering display metadata":
+            found["mastering_display"] = {k: v for k, v in data.items() if k != "side_data_type"}
+        elif kind == "Content light level metadata":
+            found["content_light"] = {"max_content": data.get("max_content"), "max_average": data.get("max_average")}
+    return found
+
+
+def packet_times(ffprobe: str, path: Path, index: int) -> list:
+    """The presentation times of a stream's packets, in order."""
+    proc = run_tool([ffprobe, "-v", "error", "-select_streams", str(index), "-show_entries", "packet=pts_time",
+                     "-of", "csv=p=0", path], timeout=TOOL_TIMEOUT_S * 20)
+    times = sorted(t for t in (number(line.strip().strip(",")) for line in proc.stdout.splitlines()) if t is not None)
+    return times
+
+
+def is_constant_rate(times: list) -> bool:
+    if len(times) < 3:
+        return True
+    steps = [b - a for a, b in zip(times, times[1:])]
+    typical = sorted(steps)[len(steps) // 2]
+    return all(abs(s - typical) <= max(0.002, typical * 0.02) for s in steps)
+
+
+def disposition_of(stream: dict) -> dict:
+    disposition = stream.get("disposition") or {}
+    return {k: bool(v) for k, v in disposition.items() if k in ("default", "forced", "hearing_impaired",
+                                                              "visual_impaired", "captions", "descriptions",
+                                                              "dub", "original", "comment")}
+
+
+def stream_summary(stream: dict) -> dict:
+    tags = stream.get("tags") or {}
+    summary = {"index": stream["index"], "codec": stream.get("codec_name"), "codec_tag": stream.get("codec_tag_string"),
+               "language": tags.get("language"), "title": tags.get("title"),
+               "disposition": disposition_of(stream), "start_time": number(stream.get("start_time"))}
+    if stream.get("codec_type") == "audio":
+        summary.update({"channels": stream.get("channels"), "channel_layout": stream.get("channel_layout"),
+                        "sample_rate": stream.get("sample_rate")})
+    return summary
+
+
+def inspect_video(path: Path, tools: dict | None = None) -> dict:
+    """What ffprobe reads from the file: never its name alone. The file is only read."""
+    if not path.is_file():
+        raise LabelToolError("not_found", f"Video not found: {path}")
+    tools = tools or require_video_tools()
+    proc = run_tool([tools["ffprobe"], "-v", "error", "-show_format", "-show_streams", "-of", "json", path],
+                    timeout=TOOL_TIMEOUT_S * 4)
+    try:
+        probed = json.loads(proc.stdout or "{}")
+    except json.JSONDecodeError:
+        probed = {}
+    message = (proc.stderr or "").strip().splitlines()[-1:] or ["no stream found"]
+    if proc.returncode != 0 or not probed.get("streams"):
+        raise LabelToolError("unreadable_video", f"Cannot read {path.name} as a video: {message[0]}")
+    fmt = probed.get("format", {})
+    videos = [s for s in probed["streams"] if s.get("codec_type") == "video"
+              and not (s.get("disposition") or {}).get("attached_pic")]
+    if not videos:
+        raise LabelToolError("unreadable_video", f"{path.name} holds no video stream.")
+    main = videos[0]
+    times = packet_times(tools["ffprobe"], path, main["index"])
+    rotation = rotation_of(main)
+    width, height = main.get("width"), main.get("height")
+    display = (height, width) if rotation in (90, 270) else (width, height)
+    side = first_frame_side_data(tools["ffprobe"], path)
+    duration = number(fmt.get("duration")) or number(main.get("duration"))
+    colour = {
+        "primaries": main.get("color_primaries"), "transfer": main.get("color_transfer"),
+        "matrix": main.get("color_space"), "range": main.get("color_range"),
+        "dynamic_range": dynamic_range(main, side),
+    }
+    if colour["dynamic_range"] != "sdr":
+        colour["hdr_metadata"] = hdr_metadata(tools["ffprobe"], path)
+    others = [s for s in probed["streams"] if s is not main]
+    info = {
+        "path": str(path),
+        "container": {
+            "format": container_format(path, fmt.get("format_name", ""), fmt.get("tags") or {}),
+            "format_name": fmt.get("format_name"), "duration": duration,
+            "start_time": number(fmt.get("start_time")), "size": int(fmt.get("size") or path.stat().st_size),
+        },
+        "video": {
+            "index": main["index"], "codec": main.get("codec_name"), "profile": main.get("profile"),
+            "width": width, "height": height, "display_width": display[0], "display_height": display[1],
+            "rotation": rotation, "pix_fmt": main.get("pix_fmt"), "bit_depth": bit_depth(main.get("pix_fmt")),
+            "frame_rate": main.get("r_frame_rate"), "average_frame_rate": main.get("avg_frame_rate"),
+            "constant_frame_rate": is_constant_rate(times), "frames": len(times),
+            "start_time": number(main.get("start_time")), "colour": colour,
+        },
+        "audio": [stream_summary(s) for s in others if s.get("codec_type") == "audio"],
+        "subtitles": [stream_summary(s) for s in others if s.get("codec_type") == "subtitle"],
+        "other_streams": [{**stream_summary(s), "type": s.get("codec_type")} for s in others
+                          if s.get("codec_type") not in ("audio", "subtitle")],
+    }
+    info["labelling"] = labelling_support(info, tools)
+    return info
+
+
+def cmd_video_inspect(args: argparse.Namespace) -> dict:
+    return inspect_video(Path(args.video))
+
+
+# --- labelling paths --------------------------------------------------------------
+
+# The labelling paths this tool has validated end to end. A video outside
+# them stops for a user decision; it is never converted silently.
+LABELLING_PATHS: list = []
+
+
+def labelling_path_status(path: dict, found: dict) -> dict:
+    missing = [f"{kind[:-1]} {name}" for kind, names in path["needs"].items() for name in names
+               if name not in found.get(kind, set())]
+    return {"name": path["name"], "description": path["description"], "validated": True,
+            "available": not missing, "missing": missing}
+
+
+def labelling_support(info: dict, tools: dict) -> dict:
+    return {"supported": False, "issues": [{
+        "code": "renderer_not_available",
+        "message": "This version inspects videos but cannot label them yet: no validated rendering path exists.",
+    }]}
+
+
+def cmd_video_apply(args: argparse.Namespace) -> dict:
+    raise LabelToolError(
+        "video_not_supported_yet",
+        "Video labelling is not available yet: this version can check the FFmpeg tools and inspect a video, "
+        "but has no validated way to produce a Labelled Copy of it.",
+    )
+
+
 class JsonArgumentParser(argparse.ArgumentParser):
     def error(self, message: str):  # report usage errors as JSON too
         raise LabelToolError("usage", message)
@@ -1572,6 +1983,18 @@ def build_parser() -> argparse.ArgumentParser:
     copy_icons.add_argument("--to", required=True, help="the project folder to copy them into")
     copy_icons.add_argument("--colour", default="black", choices=("black", "white", "both"))
     copy_icons.set_defaults(handler=cmd_copy_icons)
+
+    tools = sub.add_parser("video-tools", help="Check ffmpeg and ffprobe, and what this build can do.")
+    tools.set_defaults(handler=cmd_video_tools)
+
+    inspect = sub.add_parser("video-inspect", help="Read a video's streams, timing, orientation and colour.")
+    inspect.add_argument("video")
+    inspect.set_defaults(handler=cmd_video_inspect)
+
+    vapply = sub.add_parser("video-apply", help="Write a Labelled Copy of a video.")
+    vapply.add_argument("video")
+    vapply.add_argument("--variant", required=True, choices=VARIANTS)
+    vapply.set_defaults(handler=cmd_video_apply)
 
     return parser
 

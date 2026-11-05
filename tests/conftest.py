@@ -52,7 +52,9 @@ class Result:
     stderr: str
 
 
-def run_label_tool(*args: str | Path, cwd: Path | None = None) -> Result:
+def run_label_tool(*args: str | Path, cwd: Path | None = None, env: dict | None = None) -> Result:
+    """Run label_tool. `env` replaces variables in the environment it gets,
+    such as PATH to hide or fake ffmpeg and ffprobe."""
     uv = shutil.which("uv")
     assert uv, "uv must be installed to run label_tool"
     proc = subprocess.run(
@@ -60,7 +62,8 @@ def run_label_tool(*args: str | Path, cwd: Path | None = None) -> Result:
         capture_output=True,
         text=True,
         cwd=cwd,
-        timeout=300,
+        timeout=600,
+        env={**os.environ, **env} if env else None,
     )
     try:
         payload = json.loads(proc.stdout)

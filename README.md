@@ -27,7 +27,9 @@ codex plugin marketplace add condensetech/eu-ai-labelling
 
 then open `/plugins` in Codex and install **EU AI Labelling**.
 
-The image tool needs [`uv`](https://docs.astral.sh/uv/) (or Python 3.10+ with Pillow and resvg-py installed). No other system packages are required.
+The image tool needs [`uv`](https://docs.astral.sh/uv/) (or Python 3.10+ with Pillow and resvg-py installed). Images, documents and sites need no other system packages.
+
+Videos also need [FFmpeg](https://ffmpeg.org/download.html) (`ffmpeg` and `ffprobe`) installed on your machine. The plugin doesn't install it: when it is missing, the agent gives you the install steps for your platform and checks again once you are done.
 
 ## Use
 

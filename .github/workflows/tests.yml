@@ -13,6 +13,8 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v6
+      - name: Install FFmpeg for the video tests
+        run: sudo apt-get update && sudo apt-get install -y ffmpeg
       - name: Install the harness that runs the React label component
         run: npm ci --prefix tests/evals/site
       - name: Run the fast suite

@@ -226,7 +226,7 @@ def doc_command(reference: str, subcommand: str, fill: dict[str, str | list[str]
     procedure = (skill_dir / "references" / reference).read_text()
     commands = [
         line.strip() for block in fenced(procedure) for line in block.splitlines()
-        if "label_tool.py" in line and f" {subcommand} " in line
+        if "label_tool.py" in line and re.search(rf" {re.escape(subcommand)}(\s|$)", line)
         and (with_flag is None or with_flag in line) and (without_flag is None or without_flag not in line)
     ]
     assert len(commands) == 1, f"expected one {subcommand} command in {reference}, found {commands}"

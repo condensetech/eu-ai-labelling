@@ -19,6 +19,7 @@ ROUTES = [
     ("SKILL.md", "Label it", "references/creative-work.md"),
     ("SKILL.md", "Label it", "references/batch.md"),
     ("SKILL.md", "Label it", "references/site.md"),
+    ("SKILL.md", "Label it", "references/video.md"),
     ("SKILL.md", "Label it", "references/update-references.md"),
     ("SKILL.md", "Report", "references/batch.md"),
     ("SKILL.md", "Report", "references/update-references.md"),
