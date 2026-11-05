@@ -27,11 +27,11 @@ Black, White, Black 50% or White 50%. The plugin applies Black and White only; t
 _Avoid_: Theme, style
 
 **Labelled Copy**:
-A new image file carrying the Label, derived from an original that stays untouched.
-_Avoid_: Output, watermarked image
+A new image or video file carrying the visible Label within its content, derived from an original that stays untouched.
+_Avoid_: Output, watermarked image, watermarked video
 
 **Creative Work**:
-An image the user presents as artistic, satirical or fictional, where an icon inside the picture would get in the way. The user chooses a caption below it or burn-in.
+An image or video the user presents as artistic, satirical or fictional, whose creative character informs how the Label is presented.
 _Avoid_: Art, entertainment
 
 ### Roles
