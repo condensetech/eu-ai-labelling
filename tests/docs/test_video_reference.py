@@ -82,8 +82,51 @@ def test_the_reference_lists_exactly_the_validated_paths(tmp_path):
     assert set(re.findall(r"\*\*`([a-z0-9-]+)`\*\*", listed)) == {p["name"] for p in report["paths"]}
 
 
-def test_videos_never_go_through_image_reference_updates_yet():
-    assert "Don't run `references` or any alt-text update for a video" in VIDEO_MD.read_text()
+PLAYER = """\
+<html lang="en"><body>
+<video controls poster="media/still.png">
+  <source src="media/clip.mp4" type="video/mp4">
+  <track kind="subtitles" src="media/clip.en.vtt" srclang="en">
+</video>
+<p>A walk along the lake. <a href="media/clip.mp4">Download</a></p>
+<img src="media/still.png" alt="The lake at dawn">
+</body></html>
+"""
+
+
+def test_the_references_step_runs_as_written_on_the_approved_copy(tmp_path):
+    """Step 7's command, after step 4's: the player's source points to the
+    Labelled Copy, and nothing else on the page changes: no alt text, no
+    disclosure, the track and the download link stay."""
+    project = tmp_path / "site"
+    (project / "media").mkdir(parents=True)
+    video = flat_mp4(project / "media" / "clip.mp4", size="640x360")
+    page = project / "index.html"
+    page.write_text(PLAYER)
+    env = real_tools(tmp_path / "bin")
+    code, result = run_doc(doc_command("video.md", "video-apply", {
+        "<video>": str(video), "<generated|modified>": "generated", "<tl|tr|bl|br>": "tr"}), project, env)
+    assert code == 0, result
+
+    code, result = run_doc(doc_command("video.md", "references", {
+        "<video>": str(video), "<project root>": str(project)}), project, env)
+
+    assert code == 0, result
+    assert page.read_text() == PLAYER.replace('<source src="media/clip.mp4"', '<source src="media/clip.ai-label.mp4"')
+    assert [(a["file"], a["kind"]) for a in result["applied"]] == [("index.html", "html-video-source")]
+
+
+def test_the_references_step_waits_for_a_final_copy_and_explains_every_kind_and_reason():
+    text = VIDEO_MD.read_text()
+    seventh = step(text, "Point the project's players to it")
+    assert "final" in seventh and "approve the new copy first" in seventh
+    assert "failed, was refused or skipped" in seventh
+    for word in ("`html-video`", "`html-video-source`", "`link`", "`other`", "`dynamic`", "`external`",
+                 "`unresolved`", "`not_a_player`", "`needs_hand_edit`", "`applied`"):
+        assert word in seventh, f"no rule for {word}"
+    assert "never writes alt text" in seventh and "disclosure" in seventh
+    assert "Don't run `references`" not in text
+    assert "video" in step(SKILL_MD.read_text(), "Label it")
 
 
 def test_a_creative_work_video_gets_no_caption():

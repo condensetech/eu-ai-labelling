@@ -49,7 +49,7 @@ The copy keeps the container, the video codec, the dimensions, the frame timing 
    - If they ask for a change, run `video-apply` again with it. It replaces the previous Labelled Copy and still leaves the original untouched. A changed copy needs approval again.
    - A Labelled Copy is **final** once the user approves it, or when they said beforehand that they don't need a preview. A preview waiver skips only the user's review: the tool's checks always run.
 
-   Done when the Labelled Copy is final. Don't run `references` or any alt-text update for a video: those are for images.
+   Done when the Labelled Copy is final. For a video inside the project, go on with step 7; for a file on its own, the Labelled Copy is the delivery.
 6. **When it can't be labelled as it is**, nothing was written, and the original and any previous Labelled Copy are unchanged. Act on `error.code`:
    - `preservation_unsupported` (or `labelling.supported` false in step 2): the video has characteristics this version can't keep. Tell the user, in plain words, what each entry of `issues` says, that nothing was converted or dropped, and ask how they want to proceed, for example converting the video themselves first. Don't convert anything on your own. An HDR video is never turned into SDR.
    - `render_failed`, `output_validation_failed`, `frame_extraction_failed`: tell the user what `error.message` says; the original and any previous Labelled Copy are unchanged.
@@ -57,7 +57,20 @@ The copy keeps the container, the video codec, the dimensions, the frame timing 
    - `labelled_copy`: the file is already a Labelled Copy: label its original instead.
    - `video_tools_missing`: go back to step 1.
    - `not_found`, `usage`: fix the command and run again.
+7. **Point the project's players to it.** Only a final Labelled Copy (step 5) replaces references, and only one that `video-apply` just produced and the user approved: after a change, approve the new copy first. A video that failed, was refused or skipped, or is still waiting for approval, keeps every reference on the original; in a batch, run this step for each final copy only. Skip it when the user said to leave their pages alone, or the video is not inside the project. The project root is chosen as `references/update-references.md` says. Run:
+
+   ```
+   uv run <skill folder>/scripts/label_tool.py references <video> --root <project root> --apply
+   ```
+
+   `<video>` is the original. It searches the project's files as for an image, and changes only the literal `src` of a `<video>` and of a `<source>` inside a `<video>`, in place, to the Labelled Copy's file name. It never writes alt text, a caption, a transcript or any disclosure around the player: the incorporated Label is the disclosure. Tracks (`<track>` subtitles and descriptions), `poster`, `controls` and every other attribute stay as they are. It prints `media: "video"`, then:
+   - `updatable`: each use of the original, with its `file`, `line`, `reference`, `replacement` and `kind`: `html-video` (a `<video src>`), `html-video-source` (a `<source src>` inside a `<video>`), `link` (an `<a href>` or Markdown link, which keeps pointing to the original) or `other`;
+   - `applied`: each `html-video` and `html-video-source` now pointing to the Labelled Copy;
+   - `needs_hand_edit`: each `other` use, unchanged (an import, a framework component such as `<Video src>`, a `poster` or `data-` attribute, a data field): read it, and if it plays the video, change its path to its `replacement` by hand;
+   - `not_updatable`, unchanged, with its `reason`: `dynamic` (a path built at run or build time), `external` (a URL on another host), `unresolved` (it leads to no file in the project) or `not_a_player` (an `<img>`, a `<source>` inside a `<picture>` or an `<audio>`, or a Markdown image: no video player shows it there, so leave it).
+
+   A second run finds nothing left: uses already pointing to the Labelled Copy are not uses of the original. Done when the command exits 0. On `usage`, drop `--wording`, `--alt-mention` and `--lang`: a video takes none. On `no_labelled_copy`, finish steps 4 and 5 first; on `labelled_copy`, pass its original; on `not_found`, find the video the user meant; on `outside_project`, check `--root`. On `overlapping_edits`, no page changed: edit the page named by hand.
 
 ## Report
 
-Add to the report of `SKILL.md` step 5: the Labelled Copy's path, its Icon Variant and corner, what the copy kept (`video`), and that the video stream was re-encoded to incorporate the Label.
+Add to the report of `SKILL.md` step 5: the Labelled Copy's path, its Icon Variant and corner, what the copy kept (`video`), and that the video stream was re-encoded to incorporate the Label. After step 7, add **References updated** (each `applied` file and line, old path and new) and **References not updated** (each `needs_hand_edit` and `not_updatable` entry you didn't fix, with its file, line and reason in plain words). Say that only files in the project changed: a published site, a CMS or a copy uploaded elsewhere still shows the original until the user replaces it there.

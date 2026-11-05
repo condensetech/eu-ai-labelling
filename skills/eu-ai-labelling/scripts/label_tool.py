@@ -1186,6 +1186,11 @@ MARKDOWN_LINK_BY_LABEL = re.compile(r"(?<![!\]])\[([^\]\[]+)\](?:\[([^\]]*)\]|(?
 SHARED_DEFINITION = {"kind": None, "reason": "shared"}
 # Tags whose attributes can hold an image path, by the kind they give it.
 TAG_KINDS = {"img": "html-img", "source": "html-source", "a": "link"}
+# The kinds of a video's player references: the `src` of a `<video>`, and of a
+# `<source>` inside one. Only they point to a video's Labelled Copy.
+VIDEO_KINDS = {"html-video", "html-video-source"}
+# Where a `<source>` sits: the last `<video>`, `<picture>` or `<audio>` opened or closed before it.
+MEDIA_ELEMENT = re.compile(r"<(/?)(video|picture|audio)(?![\w:.-])", re.I)
 
 
 def markdown_label(label: str) -> str:
@@ -1240,15 +1245,56 @@ def markdown_kind(text: str, start: int) -> dict | None:
     return None
 
 
-def html_kind(text: str, start: int) -> dict | None:
-    """What an HTML or JSX reference at `start` is: an `<img>` (with its alt), a `<source>` or a link."""
-    for match in reversed(list(re.finditer(r"<(img|source|a)(?![\w:.-])", text[:start], re.I))):
+def in_video(text: str, tag_start: int) -> bool:
+    """Whether the tag at `tag_start` sits inside an open `<video>` element.
+
+    A commented-out tag opens nothing, and a self-closing `<video ... />` (JSX)
+    holds no `<source>`.
+    """
+    comments = [m.span() for m in re.finditer(r"<!--.*?(?:-->|\Z)", text[:tag_start], re.S)]
+    last = None
+    for match in MEDIA_ELEMENT.finditer(text, 0, tag_start):
+        if not any(a <= match.start() < b for a, b in comments):
+            last = match
+    if not last or last.group(1) or last.group(2).lower() != "video":
+        return False
+    _, tag_end = tag_attributes(text, last.start())
+    return text[tag_end - 1: tag_end] != "/"
+
+
+def is_html_element(name: str) -> bool:
+    """Whether a tag name is an HTML element (`video`, `VIDEO`), not a framework component (`Video`)."""
+    return name in (name.lower(), name.upper())
+
+
+def video_kind(match: re.Match, text: str, holder: str) -> dict | None:
+    """The kind of a reference held by a `<video>` or a `<source>` inside one, or None for any other tag."""
+    tag = match.group(1)
+    if tag.lower() not in ("video", "source"):
+        return None
+    if tag.lower() == "source" and not in_video(text, match.start()):
+        return None
+    if is_html_element(tag) and holder.lower() == "src":
+        return {"kind": "html-video" if tag.lower() == "video" else "html-video-source"}
+    # A `poster`, a `data-src`, a component's prop: the tool can't tell what it does.
+    return {"kind": "other"}
+
+
+def html_kind(text: str, start: int, media: str = "image") -> dict | None:
+    """What an HTML or JSX reference at `start` is: an `<img>` (with its alt), a `<source>` or a link;
+    for a video, also a `<video src>` or a `<source>` inside a `<video>`."""
+    tags = r"<(img|source|a|video)(?![\w:.-])" if media == "video" else r"<(img|source|a)(?![\w:.-])"
+    for match in reversed(list(re.finditer(tags, text[:start], re.I))):
         attributes, _ = tag_attributes(text, match.start())
         holder = next((n for n, a, b in attributes if a <= start < b), None)
         if holder is None:
             continue
         if holder.lower() in TEXT_ATTRIBUTES or holder.lower().startswith("aria-"):
             return NOT_A_REFERENCE
+        if media == "video":
+            found = video_kind(match, text, holder)
+            if found:
+                return found
         kind = TAG_KINDS[match.group(1).lower()]
         if kind != "html-img":
             return {"kind": kind, "alt": None, "alt_expression": None}
@@ -1284,24 +1330,31 @@ def img_alt(text: str, attributes: list[tuple[str, int, int]]) -> tuple[str | No
     return None, None
 
 
-def reference_kind(text: str, start: int) -> dict:
+def reference_kind(text: str, start: int, media: str = "image") -> dict:
     """The kind of the reference at `start`, with the alt text an image has (`other` when unknown)."""
-    return markdown_kind(text, start) or html_kind(text, start) or {"kind": "other", "alt": None, "alt_expression": None}
+    return (markdown_kind(text, start) or html_kind(text, start, media)
+            or {"kind": "other", "alt": None, "alt_expression": None})
 
 
 def cmd_references(args: argparse.Namespace) -> dict:
     root = Path(args.root or Path.cwd()).resolve()
     original = Path(args.image)
     original = (original if original.is_absolute() else Path.cwd() / original).resolve()
+    media = "video" if original.suffix.lower() in VIDEO_SUFFIXES else "image"
+    if media == "video" and (args.alt_mention or args.wording or args.lang):
+        raise LabelToolError(
+            "usage", "A video has no alt text: run `references --apply` for it without --wording, "
+                     "--alt-mention or --lang.")
     if not original.is_file():
-        raise LabelToolError("not_found", f"Image not found: {original}")
+        raise LabelToolError("not_found", f"{media.capitalize()} not found: {original}")
     if is_labelled_copy(original):
-        raise LabelToolError("labelled_copy", f"{original} is a Labelled Copy: pass the original image.")
+        raise LabelToolError("labelled_copy", f"{original} is a Labelled Copy: pass the original {media}.")
     copy = labelled_copy_path(original)
     if not copy.is_file():
+        apply = "video-apply" if media == "video" else "apply"
         raise LabelToolError(
             "no_labelled_copy",
-            f"{original.name} has no Labelled Copy ({copy.name}) yet: label it with `apply` first.",
+            f"{original.name} has no Labelled Copy ({copy.name}) yet: label it with `{apply}` first.",
         )
     try:
         original.relative_to(root)
@@ -1339,12 +1392,19 @@ def cmd_references(args: argparse.Namespace) -> dict:
             if reason:
                 not_updatable.append({**entry, "reason": reason})
                 continue
-            kind = reference_kind(text, start)
+            kind = reference_kind(text, start, media)
             if kind is NOT_A_REFERENCE:
                 continue
             if kind is SHARED_DEFINITION:
                 not_updatable.append({**entry, "reason": "shared"})
                 continue
+            if media == "video":
+                if kind["kind"] not in (*VIDEO_KINDS, "link", "other"):
+                    # An `<img>`, a `<source>` in a `<picture>` or `<audio>`, a
+                    # Markdown image: it is no video player.
+                    not_updatable.append({**entry, "reason": "not_a_player"})
+                    continue
+                kind = {"kind": kind["kind"]}  # a video has no alt text to report
             # The copy sits next to the original: only the file name changes,
             # keeping its encoding (`my%20hero.png` -> `my%20hero.ai-label.png`).
             stem, dot, suffix = written.rpartition(".")
@@ -1359,10 +1419,15 @@ def cmd_references(args: argparse.Namespace) -> dict:
     result = {
         "original": str(original),
         "labelled_copy": str(copy),
+        "media": media,
         "root": str(root),
         "updatable": updatable,
         "not_updatable": not_updatable,
     }
+    if media == "video":
+        if args.apply:
+            result.update(apply_references(positions, root, {}, media="video"))
+        return result
     if args.apply and not (args.wording or args.alt_mention):
         raise LabelToolError(
             "usage", "--apply also adds the AI mention to each alt text: give --wording generated|modified "
@@ -1408,10 +1473,11 @@ def table_mention(page: Path, wording: str, lang: str | None) -> tuple[str | Non
 
 
 def apply_references(positions: list, root: Path, mentions: dict, wording: str | None = None,
-                     lang: str | None = None) -> dict:
+                     lang: str | None = None, media: str = "image") -> dict:
     """Point each updatable reference (not a link) to the Labelled Copy and,
     with a mention for its page (given, or from the wording table in the
-    page's language), add the mention to its alt text."""
+    page's language), add the mention to its alt text. A video's references
+    get only the new path: no alt text, no text around the player."""
     edits: dict = {}  # page -> [(start, end, new text)]
     applied, alt_updated, alt_unchanged, hand = [], [], [], []
     from_table: dict = {}
@@ -1428,12 +1494,16 @@ def apply_references(positions: list, root: Path, mentions: dict, wording: str |
         if entry["kind"] == "other":
             # An import, a style, a data field or prose: the tool can't tell
             # whether it shows the image, so it changes nothing there.
+            reason = ("not changed: if it plays the video, point it to the Labelled Copy" if media == "video" else
+                      "not changed: if it shows the image, point it to the Labelled Copy and "
+                      "add the mention to the alt text where the image is shown")
             hand.append({**where, "reference": entry["reference"], "replacement": entry["replacement"],
-                         "reason": "not changed: if it shows the image, point it to the Labelled Copy and "
-                                   "add the mention to the alt text where the image is shown"})
+                         "reason": reason})
             continue
         edits[page].append((start, start + len(entry["reference"]), entry["replacement"]))
         applied.append({**where, "reference": entry["reference"], "replacement": entry["replacement"]})
+        if media == "video":
+            continue
         mention = mentions.get(entry["file"], mentions.get(""))
         if entry["kind"] == "html-source":
             hand.append({**where, "reason": "its alt text is not on this reference: edit the alt where the image is shown"})

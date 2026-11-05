@@ -93,7 +93,7 @@ The plugin stores no settings: say what you want in the request ("in Italian", "
 
 The plugin doesn't watch for unlabelled content: content gets labelled when you ask for it.
 
-After a Labelled Copy is made in a project, the agent points the image references in your Markdown and HTML pages at the copy, checks the other places that name the image (styles, templates, source and data files) and updates those that show it, updates the alt text to say the image is AI-generated or AI-modified, and lists the references it couldn't update (for example ones in a CMS) for you to fix by hand.
+After a Labelled Copy is made in a project, the agent points the image references in your Markdown and HTML pages at the copy, checks the other places that name the image (styles, templates, source and data files) and updates those that show it, updates the alt text to say the image is AI-generated or AI-modified, and lists the references it couldn't update (for example ones in a CMS) for you to fix by hand. Once you approve a video's Labelled Copy, the agent points the `<video src>` and `<source>` elements of your video players at it, keeping their subtitle and description tracks, poster and controls, changes no alt text and adds no disclosure around the player: the incorporated Label is the disclosure. Imports, components and computed paths are listed for you to check.
 
 ## Placement defaults
 
