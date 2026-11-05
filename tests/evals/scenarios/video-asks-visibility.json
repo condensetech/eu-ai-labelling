@@ -1,0 +1,16 @@
+{
+  "description": "A video with its variant named but nothing said on when the Label shows: the skill asks whether to show it continuously or periodically, says what the default does, and labels nothing yet.",
+  "files": {
+    "clip.mp4": {
+      "video": {
+        "seconds": 2,
+        "size": "640x360"
+      }
+    }
+  },
+  "prompt": "/eu-ai-labelling label clip.mp4 as fully AI-generated.",
+  "expect": {
+    "labelled": false,
+    "asks_visibility": true
+  }
+}

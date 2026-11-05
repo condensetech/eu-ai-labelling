@@ -119,6 +119,19 @@ def test_check_batch_accepts_a_compliant_reply(batch):
     check_batch(*batch, BATCH_REPLY)
 
 
+def test_check_batch_accepts_the_images_listed_under_a_bold_heading_before_the_question(batch):
+    reply = BATCH_REPLY.replace(
+        "crowd.png and rain.png have no free corner: every corner is busy.\n"
+        "Which corner should I use for crowd.png and rain.png?",
+        "**Waiting on your answer**\n"
+        "- `crowd.png`: every corner is equally busy.\n"
+        "- `rain.png`: every corner is equally busy.\n\n"
+        "Which corner for each?",
+    )
+
+    check_batch(*batch, reply)
+
+
 @pytest.mark.parametrize("weakened", sorted(WEAKENED_BATCH_REPLIES))
 def test_check_batch_rejects_a_weakened_reply(batch, weakened):
     old, new = WEAKENED_BATCH_REPLIES[weakened]

@@ -1,0 +1,16 @@
+{
+  "description": "A video whose origin nobody stated: the skill asks whether AI created it from scratch or edited real footage, and labels nothing yet.",
+  "files": {
+    "clip.mp4": {
+      "video": {
+        "seconds": 2,
+        "size": "640x360"
+      }
+    }
+  },
+  "prompt": "/eu-ai-labelling label clip.mp4",
+  "expect": {
+    "labelled": false,
+    "asks_origin": true
+  }
+}

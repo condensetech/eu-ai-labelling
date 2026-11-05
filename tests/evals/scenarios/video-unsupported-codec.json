@@ -1,0 +1,18 @@
+{
+  "description": "An MP4 whose video codec (MPEG-4 Part 2) has no validated labelling path: no Labelled Copy and no converted file is written, and the reply explains and asks how to proceed.",
+  "files": {
+    "old-clip.mp4": {
+      "video": {
+        "seconds": 2,
+        "size": "640x360",
+        "codec": "mpeg4"
+      }
+    }
+  },
+  "prompt": "/eu-ai-labelling label old-clip.mp4 as fully AI-generated. I don't need a preview, and I have no preference on when the label shows: use your defaults.",
+  "expect": {
+    "labelled": false,
+    "asks_how_to_proceed": true,
+    "reply_matches": ["mpeg-?4"]
+  }
+}

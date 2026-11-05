@@ -1,0 +1,17 @@
+{
+  "description": "A short video generated from scratch, with no preview wanted and no visibility preference: an MP4 Labelled Copy showing the Fully AI-Generated icon all the way through.",
+  "files": {
+    "clip.mp4": {
+      "video": {
+        "seconds": 2,
+        "size": "640x360"
+      }
+    }
+  },
+  "prompt": "/eu-ai-labelling label clip.mp4 as fully AI-generated. It goes on our public product page. I don't need a preview, and I have no preference on when the label shows: use your defaults.",
+  "expect": {
+    "variant": "Fully AI-Generated",
+    "labelled": true,
+    "visibility": "continuous"
+  }
+}

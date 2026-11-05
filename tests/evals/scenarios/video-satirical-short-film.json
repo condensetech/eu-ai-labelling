@@ -1,0 +1,18 @@
+{
+  "description": "A satirical short film generated from scratch: a Creative Work video still gets the Label incorporated in its picture, and no caption is offered.",
+  "files": {
+    "satire-short.mp4": {
+      "video": {
+        "seconds": 2,
+        "size": "640x360"
+      }
+    }
+  },
+  "prompt": "/eu-ai-labelling label satire-short.mp4, my satirical short film. I generated it from scratch with a video model: a photorealistic scene of our town's mayor handing out medals to the potholes on Main Street. It looks like real news footage, but it's satire for our comedy channel's viewers. I don't need a preview, and I have no preference on when the label shows: use your defaults.",
+  "expect": {
+    "variant": "Fully AI-Generated",
+    "labelled": true,
+    "visibility": "continuous",
+    "offers_caption": false
+  }
+}

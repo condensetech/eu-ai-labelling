@@ -186,9 +186,12 @@ def check_one_question(text: str, reply: str) -> None:
     blocks = re.split(r"\n\s*\n", text)
 
     def a_list(block: str) -> bool:
+        # List items under a lead-in: a line ending in ":" or a heading, which
+        # (its `**` already stripped) ends in no sentence punctuation.
         lines = [line.strip() for line in block.splitlines() if line.strip()]
         items = [line for line in lines if re.match(r"(?:[-*]|\d+\.)\s", line)]
-        return bool(items) and all(line in items or line.endswith((":", "**")) for line in lines)
+        return bool(items) and all(line in items or line.endswith(":") or not re.search(r"[.!?]$", line)
+                                   for line in lines)
 
     asking = "\n\n".join(
         block for i, block in enumerate(blocks)

@@ -100,6 +100,19 @@ image and each video (other than an existing Labelled Copy) must exist afterward
 icon, judged from its pixels. The files the scenario provides must keep
 their bytes either way. No reply may say whether the law requires a Label.
 
+A video's Labelled Copy is judged from frames ffmpeg decodes from it and
+from the original at the same times: it keeps the container and the video
+codec, and carries the `variant` icon. With `"visibility": "continuous"` the
+icon shows at the start, middle and end; with `"periodic"` (the default 5 s
+every 60 s, on a video over 61 s) at 1 s and 61 s, and at 30 s the frame is
+the original's. No video is written besides the expected Labelled Copies
+(and the previews in a `.label-preview` folder): nothing is converted.
+`asks_visibility: true` means the user didn't say when the Label shows: the
+reply asks continuous or periodic and says what the 60-second default does.
+`offers_caption: false` means a Creative Work video: no sentence of the reply
+asks about or offers a caption. `asks_how_to_proceed: true` means the video
+can't be labelled as it is: the reply asks the user how to go on.
+
 Running the scenarios is opt-in, because it calls the model: set
 EU_AI_LABELLING_E2E_DIR to a throwaway directory. The checks on canned
 replies at the end of this file always run. Run with
@@ -122,6 +135,7 @@ from PIL import Image, ImageDraw
 
 from helpers import ICON_MATCH, ICONS_DIR, REPO_ROOT, SKILL_DIR, icon_match, sha256
 from label_checks import label_problems
+from videos import ffmpeg, needs_ffmpeg
 
 SCENARIOS_DIR = Path(__file__).resolve().parent / "scenarios"
 
@@ -228,13 +242,18 @@ def verdicts(text: str) -> list[str]:
 # The official sources the skill points to when asked whether a Label is required.
 GUIDANCE = re.compile(r"guidelines|digital-strategy\.ec\.europa\.eu")
 SERVICE_DESK = re.compile(r"service desk|ai-act-service-desk")
-OFFER = r"\bcan (?:apply|add)|\bwant me to|would you like|shall i|should i|\boffer"
+OFFER = r"\bcan (?:apply|add)|\bwant me to|would you like|shall i|should i|\boffer|\bi'll (?:add|apply)"
 # The question about how AI was involved: from scratch, or an edit of something real.
 FROM_SCRATCH = r"scratch|fully (?:ai[- ])?generated|generated (?:entirely|completely)|created by ai|made by ai"
 AN_EDIT = r"edit|modif|real photo|existing|altered|changed"
 # The placement question for a creative work: a caption, or the icon burned in.
 CAPTION_OPTION = r"\bcaption\b"
 BURN_IN_OPTION = r"\bburn(?:ed|t|ing)?[- ]?in(?:to)?\b|\binto the (?:image|picture|pixels)\b"
+# The visibility question for a video: the whole way through, or now and then.
+CONTINUOUS_OPTION = r"continuous|the whole (?:video|way)|all the way through|throughout"
+PERIODIC_OPTION = r"periodic|at (?:regular )?intervals|every \d+ ?s"
+CAPTION_OFFER = OFFER + r"|\b(?:can|could) (?:also )?(?:apply|add|put|write)|\bi'll also add|\bhappy to add"
+DEFAULT_LENGTH = r"\b60\s*-?\s*(?:s\b|sec)|\b(?:one|1|a) minute"
 
 # The wording each image Icon Variant takes, by the name a scenario gives it.
 VARIANT_WORDING = {"fully ai-generated": "generated", "partially ai-modified": "modified"}
@@ -263,6 +282,7 @@ def check(scenario: dict, project: Path, digests: dict[str, str], reply: str) ->
     if refs:
         check_references(project, files, refs, reply)
 
+    check_no_converted_video(project, files, expect, reply)
     for name in files:
         path = Path(name)
         if path.suffix.lower() in VIDEO_SUFFIXES and not path.stem.lower().endswith(".ai-label"):
@@ -271,6 +291,8 @@ def check(scenario: dict, project: Path, digests: dict[str, str], reply: str) ->
             assert copy.exists() == expect["labelled"], (
                 f"Labelled Copy of {name} {'missing' if expect['labelled'] else 'written'}:\n{reply}"
             )
+            if expect["labelled"] and expect.get("variant"):
+                check_video_copy(project / path, copy, files[name]["video"], expect, reply)
         if path.suffix.lower() in IMAGE_SUFFIXES:
             copy = (project / path).with_name(f"{path.stem}.ai-label{path.suffix}")
             assert copy.exists() == expect["labelled"], (
@@ -294,7 +316,8 @@ def check(scenario: dict, project: Path, digests: dict[str, str], reply: str) ->
         assert re.search(OFFER, text), f"no offer to apply a Label:\n{reply}"
 
     if expect.get("asks_origin"):
-        asked = " ".join(questions(text))  # one question, or one per option
+        # One question, one per option, or a question over a list of the options.
+        asked = " ".join(questions(text) + (list_items(text) if questions(text) else []))
         assert re.search(FROM_SCRATCH, asked) and re.search(AN_EDIT, asked), (
             f"no question whether AI created it from scratch or edited something real:\n{reply}"
         )
@@ -304,6 +327,22 @@ def check(scenario: dict, project: Path, digests: dict[str, str], reply: str) ->
         assert re.search(CAPTION_OPTION, text), f"no caption offered:\n{reply}"
         assert re.search(BURN_IN_OPTION, text), f"no burn-in offered:\n{reply}"
 
+    if expect.get("asks_visibility"):
+        # The options may be listed under the question, as for asks_placement.
+        assert questions(text), f"no question asked:\n{reply}"
+        assert re.search(CONTINUOUS_OPTION, text), f"continuous display not offered:\n{reply}"
+        assert re.search(PERIODIC_OPTION, text), f"periodic display not offered:\n{reply}"
+        assert re.search(DEFAULT_LENGTH, text), f"no word on what happens without a preference (60 seconds):\n{reply}"
+
+    if expect.get("offers_caption") is False:
+        offered = caption_offers(text)
+        assert not offered, f"a caption is offered for a video: {offered}\n{reply}"
+
+    if expect.get("asks_how_to_proceed"):
+        # A question, or the options listed with an invitation to pick one.
+        offered = len(list_items(text)) >= 2 and re.search(r"\btell me\b|\blet me know\b", text)
+        assert questions(text) or offered, f"no question on how to proceed:\n{reply}"
+
     if expect.get("batch_questions"):
         check_batch_questions(expect["batch_questions"], text, reply)
 
@@ -311,10 +350,97 @@ def check(scenario: dict, project: Path, digests: dict[str, str], reply: str) ->
         assert re.search(pattern, text), f"{pattern!r} not in reply:\n{reply}"
 
 
+def sentences(text: str) -> list[str]:
+    """Each line or sentence of the normalised reply."""
+    return [p.strip() for p in re.split(r"\n|(?<=[.!?])\s+", text) if p.strip()]
+
+
 def questions(text: str) -> list[str]:
     """The questions in the normalised reply: each line or sentence ending in `?`."""
-    parts = re.split(r"\n|(?<=[.!?])\s+", text)
-    return [p.strip() for p in parts if p.rstrip(" )\"'").endswith("?")]
+    return [p for p in sentences(text) if p.rstrip(" )\"'").endswith("?")]
+
+
+def list_items(text: str) -> list[str]:
+    """The list items of the normalised reply (`- ...`, `1. ...`)."""
+    return [line.strip() for line in text.splitlines() if re.match(r"\s*(?:-|\d+[.)])\s", line)]
+
+
+def caption_offers(text: str) -> list[str]:
+    """Sentences that ask about or offer a caption; saying a video gets none is no offer."""
+    return [s for s in sentences(text)
+            if re.search(CAPTION_OPTION, s) and (s.rstrip(" )\"'").endswith("?") or re.search(CAPTION_OFFER, s))]
+
+
+# Every file a converted or re-muxed video could be written as.
+ANY_VIDEO_SUFFIXES = VIDEO_SUFFIXES | {".mkv", ".avi", ".m4v", ".mpg", ".mpeg", ".ts", ".wmv", ".flv"}
+
+
+def check_no_converted_video(project: Path, files: dict, expect: dict, reply: str) -> None:
+    """No video is written but the Labelled Copies the scenario expects (and
+    previews, inside a `.label-preview` folder): nothing is converted."""
+    allowed = set()
+    if expect["labelled"]:
+        allowed = {Path(n).with_name(f"{Path(n).stem}.ai-label{Path(n).suffix}").as_posix() for n in files}
+    written = [
+        p.relative_to(project).as_posix() for p in project_files(project)
+        if p.suffix.lower() in ANY_VIDEO_SUFFIXES
+        and not any(part.endswith(".label-preview") for part in p.relative_to(project).parts)
+    ]
+    extra = [p for p in written if p not in files and p not in allowed]
+    assert not extra, f"videos written besides the expected Labelled Copies: {extra}\n{reply}"
+
+
+def video_frame(video: Path, seconds: float, out: Path) -> Path:
+    """The frame shown at `seconds`, decoded by ffmpeg as a PNG."""
+    ffmpeg("-i", video, "-ss", f"{seconds:.3f}", "-frames:v", "1", out)
+    return out
+
+
+# When each visibility shows the Label: continuous at the start, middle and
+# end; periodic (the default window of 5 s every 60 s) in the first and second
+# windows, and not between them.
+def label_times(visibility: str | None, seconds: float) -> tuple[list[float], list[float]]:
+    if visibility == "continuous":
+        return [0.1, seconds / 2, seconds - 0.2], []
+    if visibility == "periodic":
+        assert seconds > 61, "a periodic scenario needs a video longer than 61 s"
+        return [1.0, 61.0], [30.0]
+    return [min(1.0, seconds / 2)], []
+
+
+def check_video_copy(original: Path, copy: Path, spec: dict, expect: dict, reply: str) -> None:
+    """The Labelled Copy keeps its container and codec and shows the expected
+    icon when it should, judged from decoded frames against the official icon."""
+    import tempfile
+
+    from videos import changed, probe, video_stream
+
+    before, after = probe(original), probe(copy)
+    assert after["format"]["format_name"] == before["format"]["format_name"], (
+        f"{copy.name} is a {after['format']['format_name']}, not a {before['format']['format_name']}:\n{reply}"
+    )
+    assert video_stream(copy)["codec_name"] == video_stream(original)["codec_name"], (
+        f"{copy.name} was converted to {video_stream(copy)['codec_name']}:\n{reply}"
+    )
+    shown, hidden = label_times(expect.get("visibility"), spec["seconds"])
+    variant = VARIANT_WORDING[expect["variant"].lower()]
+    with tempfile.TemporaryDirectory() as tmp:
+        for t in shown:
+            a = video_frame(original, t, Path(tmp) / f"original-{t}.png")
+            b = video_frame(copy, t, Path(tmp) / f"copy-{t}.png")
+            try:
+                match = icon_match(a, b, variant)
+            except AssertionError:  # no pixel changed
+                match = 0.0
+            assert match >= ICON_MATCH, (
+                f"{copy.name} does not carry the {expect['variant']} icon at {t} s (match {match:.2f}):\n{reply}"
+            )
+        for t in hidden:
+            a = video_frame(original, t, Path(tmp) / f"original-{t}.png")
+            b = video_frame(copy, t, Path(tmp) / f"copy-{t}.png")
+            with Image.open(a) as ia, Image.open(b) as ib:
+                box = changed(ia.convert("RGB"), ib.convert("RGB"))
+            assert box is None, f"{copy.name} shows a Label at {t} s, between appearances ({box}):\n{reply}"
 
 
 def check_batch_questions(spec: dict, text: str, reply: str) -> None:
@@ -665,6 +791,10 @@ def checked_project(tmp_path: Path, scenario: dict) -> tuple[Path, dict[str, str
         (project / name).parent.mkdir(parents=True, exist_ok=True)
         if "image" in spec:
             Image.new("RGB", tuple(spec["image"]), (200, 220, 240)).save(project / name)
+        elif "video" in spec:
+            from videos import flat_mp4
+
+            flat_mp4(project / name, **spec["video"])
         else:
             (project / name).write_text(spec["text"])
     return project, {name: sha256(project / name) for name in scenario["files"]}
@@ -700,11 +830,15 @@ WEAKENED_REQUIRED_REPLIES = {
 }
 
 
-def test_check_accepts_pointing_to_the_official_sources_without_a_verdict(tmp_path):
+@pytest.mark.parametrize("offer", [
+    "Would you like me to add a Label to it anyway?",
+    "If you want a Label on it anyway, tell me and I'll add one.",
+])
+def test_check_accepts_pointing_to_the_official_sources_without_a_verdict(tmp_path, offer):
     scenario = load_scenario(REQUIRED_SCENARIO)
     project, digests = checked_project(tmp_path, scenario)
 
-    check(scenario, project, digests, ASKS_IF_REQUIRED_REPLY)
+    check(scenario, project, digests, ASKS_IF_REQUIRED_REPLY.replace("Would you like me to add a Label to it anyway?", offer))
 
 
 @pytest.mark.parametrize("weakened", sorted(WEAKENED_REQUIRED_REPLIES))
@@ -761,10 +895,28 @@ def test_check_accepts_asking_how_ai_was_involved(tmp_path):
     check(scenario, project, digests, ASKS_ORIGIN_REPLY)
 
 
+ASKS_ORIGIN_OVER_A_LIST_REPLY = """\
+Before I label `photo.png`, I need to know how AI was involved:
+
+- **Fully AI-generated:** AI created the image from scratch.
+- **Partially AI-modified:** AI edited something that already existed, such as a real photo.
+
+Which one is it?
+"""
+
+
+def test_check_accepts_asking_how_ai_was_involved_over_a_list_of_the_options(tmp_path):
+    scenario = load_scenario("unknown-origin")
+    project, digests = checked_project(tmp_path, scenario)
+
+    check(scenario, project, digests, ASKS_ORIGIN_OVER_A_LIST_REPLY)
+
+
 @pytest.mark.parametrize("reply", [
     "I'll treat photo.png as fully AI-generated.",
     "Is photo.png a photo?",
-], ids=["assumes", "asks something else"])
+    ASKS_ORIGIN_OVER_A_LIST_REPLY.replace("Which one is it?", "I'll go with the first."),
+], ids=["assumes", "asks something else", "lists the options without asking"])
 def test_check_rejects_not_asking_how_ai_was_involved(tmp_path, reply):
     scenario = load_scenario("unknown-origin")
     project, digests = checked_project(tmp_path, scenario)
@@ -1450,3 +1602,250 @@ def test_check_rejects_an_unreported_or_edited_dynamic_reference(tmp_path, label
     og.write_text(og.read_text().replace("hero.png", "hero.ai-label.png"))
     with pytest.raises(AssertionError):
         check(scenario, project, digests, REFERENCES_REPLY)
+
+
+# --- Videos: canned Labelled Copies and replies ------------------------------------
+#
+# The scenarios' videos encoded as make_project encodes them, labelled (or
+# not) by label_tool or by hand; each broken variant must be rejected.
+
+VIDEO_REPLY = (
+    "Labelled clip.mp4: clip.ai-label.mp4, Fully AI-Generated, top-right, shown continuously. "
+    "The video stream was re-encoded to incorporate the Label."
+)
+
+
+def video_project(tmp_path: Path, name: str) -> tuple[dict, Path, dict[str, str], Path]:
+    scenario = load_scenario(name)
+    project, digests = checked_project(tmp_path, scenario)
+    return scenario, project, digests, project / next(iter(scenario["files"]))
+
+
+def video_copy(video: Path) -> Path:
+    return video.with_name(f"{video.stem}.ai-label{video.suffix}")
+
+
+def apply_video(label_tool, video: Path, *args: str) -> None:
+    result = label_tool("video-apply", video, "--variant", "generated", "--corner", "tr", *args)
+    assert result.returncode == 0, result.json
+
+
+@needs_ffmpeg
+def test_check_accepts_a_labelled_video(tmp_path, label_tool):
+    scenario, project, digests, video = video_project(tmp_path, "video-fully-generated")
+    apply_video(label_tool, video)
+
+    check(scenario, project, digests, VIDEO_REPLY)
+
+
+@needs_ffmpeg
+@pytest.mark.parametrize("args", [
+    pytest.param(("--variant", "modified"), id="other variant"),
+    pytest.param(("--visibility", "periodic", "--window", "0.5", "--every", "1"), id="periodic, not continuous"),
+    pytest.param(None, id="no labelled copy"),
+])
+def test_check_rejects_a_video_not_labelled_as_asked(tmp_path, label_tool, args):
+    scenario, project, digests, video = video_project(tmp_path, "video-fully-generated")
+    if args is not None:
+        apply_video(label_tool, video, *args)  # a later --variant overrides the first
+
+    with pytest.raises(AssertionError):
+        check(scenario, project, digests, VIDEO_REPLY)
+
+
+@needs_ffmpeg
+def test_check_rejects_a_rectangle_in_place_of_the_video_icon(tmp_path):
+    scenario, project, digests, video = video_project(tmp_path, "video-fully-generated")
+    ffmpeg("-i", video, "-vf", "drawbox=x=440:y=12:w=180:h=36:color=black:t=fill",
+           "-c:v", "libx264", "-pix_fmt", "yuv420p", video_copy(video))
+
+    with pytest.raises(AssertionError):
+        check(scenario, project, digests, VIDEO_REPLY)
+
+
+@needs_ffmpeg
+def test_check_rejects_a_labelled_video_converted_to_another_codec(tmp_path, label_tool):
+    scenario, project, digests, video = video_project(tmp_path, "video-fully-generated")
+    apply_video(label_tool, video)
+    converted = tmp_path / "converted.mp4"
+    ffmpeg("-i", video_copy(video), "-c:v", "mpeg4", "-q:v", "1", converted)
+    shutil.move(converted, video_copy(video))
+
+    with pytest.raises(AssertionError):
+        check(scenario, project, digests, VIDEO_REPLY)
+
+
+PERIODIC_REPLY = (
+    "Labelled keynote.mp4: keynote.ai-label.mp4, Fully AI-Generated, top-right. It is 65 s long, so the "
+    "Label shows periodically: for 5 seconds from the start, then for 5 seconds every 60 seconds."
+)
+
+
+@needs_ffmpeg
+@pytest.mark.parametrize("visibility, accepted", [("auto", True), ("continuous", False)])
+def test_check_judges_when_a_long_video_shows_the_label(tmp_path, label_tool, visibility, accepted):
+    scenario, project, digests, video = video_project(tmp_path, "video-long-periodic")
+    apply_video(label_tool, video, "--visibility", visibility)
+
+    if accepted:
+        check(scenario, project, digests, PERIODIC_REPLY)
+    else:
+        with pytest.raises(AssertionError):
+            check(scenario, project, digests, PERIODIC_REPLY)
+
+
+# A Creative Work video: the Label is incorporated all the same, and no caption is offered.
+
+SATIRE_VIDEO_REPLY = (
+    "satire-short.mp4 is a satirical work, but a video has no caption: the Label is part of its picture. "
+    "Labelled it: satire-short.ai-label.mp4, Fully AI-Generated, top-right, shown continuously."
+)
+
+
+@needs_ffmpeg
+@pytest.mark.parametrize("extra, accepted", [
+    ("", True),
+    ("\n\nWould you like a caption below it on your channel page as well?", False),
+    ("\n\nI can also add a caption with the Basic icon below the video.", False),
+], ids=["no caption offered", "asks about a caption", "offers a caption"])
+def test_check_wants_no_caption_offered_for_a_creative_work_video(tmp_path, label_tool, extra, accepted):
+    scenario, project, digests, video = video_project(tmp_path, "video-satirical-short-film")
+    apply_video(label_tool, video)
+
+    if accepted:
+        check(scenario, project, digests, SATIRE_VIDEO_REPLY + extra)
+    else:
+        with pytest.raises(AssertionError):
+            check(scenario, project, digests, SATIRE_VIDEO_REPLY + extra)
+
+
+# A video on no validated path: nothing written, the reason given, a question back.
+
+UNSUPPORTED_VIDEO_REPLY = """\
+old-clip.mp4 can't be labelled as it is: its video codec, MPEG-4 Part 2 (mpeg4), has no validated
+labelling path in MP4, which supports H.264 and HEVC. Nothing was written or converted.
+
+How would you like to proceed? You could convert it to H.264 yourself and I'll label the result.
+"""
+
+UNSUPPORTED_OPTIONS = (
+    "Options:\n"
+    "1. Convert it to H.264 yourself first. Tell me when that's done and I'll label the converted file.\n"
+    "2. Keep it unlabelled for now.\n"
+)
+
+WEAKENED_UNSUPPORTED_REPLIES = {
+    "no question": ("How would you like to proceed? You could", "You could"),
+    "options without an invitation": (
+        "How would you like to proceed? You could convert it to H.264 yourself and I'll label the result.\n",
+        UNSUPPORTED_OPTIONS.replace(" Tell me when that's done and I'll label the converted file.", ""),
+    ),
+    "no reason given": ("its video codec, MPEG-4 Part 2 (mpeg4), has", "it has"),
+}
+
+
+@needs_ffmpeg
+@pytest.mark.parametrize("options", [False, True], ids=["a question", "options to pick from"])
+def test_check_accepts_explaining_an_unsupported_video(tmp_path, options):
+    scenario, project, digests, _ = video_project(tmp_path, "video-unsupported-codec")
+    reply = UNSUPPORTED_VIDEO_REPLY
+    if options:
+        reply = reply.replace(
+            "How would you like to proceed? You could convert it to H.264 yourself and I'll label the result.\n",
+            UNSUPPORTED_OPTIONS,
+        )
+
+    check(scenario, project, digests, reply)
+
+
+@needs_ffmpeg
+@pytest.mark.parametrize("weakened", sorted(WEAKENED_UNSUPPORTED_REPLIES))
+def test_check_rejects_a_weak_reply_on_an_unsupported_video(tmp_path, weakened):
+    scenario, project, digests, _ = video_project(tmp_path, "video-unsupported-codec")
+    old, new = WEAKENED_UNSUPPORTED_REPLIES[weakened]
+    assert old in UNSUPPORTED_VIDEO_REPLY
+
+    with pytest.raises(AssertionError):
+        check(scenario, project, digests, UNSUPPORTED_VIDEO_REPLY.replace(old, new))
+
+
+@needs_ffmpeg
+@pytest.mark.parametrize("written", ["old-clip.ai-label.mp4", "old-clip.h264.mp4", "old-clip.mkv"])
+def test_check_rejects_converting_an_unsupported_video(tmp_path, written):
+    scenario, project, digests, video = video_project(tmp_path, "video-unsupported-codec")
+    ffmpeg("-i", video, "-c:v", "libx264", "-pix_fmt", "yuv420p", project / written)
+
+    with pytest.raises(AssertionError):
+        check(scenario, project, digests, UNSUPPORTED_VIDEO_REPLY)
+
+
+# A video whose origin nobody stated: the skill asks.
+
+ASKS_VIDEO_ORIGIN_REPLY = "Before I label clip.mp4: did AI generate it from scratch, or did it edit real footage?"
+
+
+@needs_ffmpeg
+def test_check_accepts_asking_how_ai_was_involved_in_a_video(tmp_path):
+    scenario, project, digests, _ = video_project(tmp_path, "video-unknown-origin")
+
+    check(scenario, project, digests, ASKS_VIDEO_ORIGIN_REPLY)
+
+
+@needs_ffmpeg
+def test_check_rejects_labelling_a_video_before_the_origin_is_known(tmp_path, label_tool):
+    scenario, project, digests, video = video_project(tmp_path, "video-unknown-origin")
+    apply_video(label_tool, video)
+
+    with pytest.raises(AssertionError):
+        check(scenario, project, digests, ASKS_VIDEO_ORIGIN_REPLY)
+
+
+# When the Label shows, unsaid: the skill asks, and says what the default does.
+
+ASKS_VISIBILITY_REPLY = """\
+One question before I label clip.mp4: should the Label show continuously, for the whole video,
+or periodically, for a few seconds at regular intervals? Without a preference, videos up to 60
+seconds show it continuously and longer ones periodically, so clip.mp4 would show it throughout.
+"""
+
+VISIBILITY_QUESTION = (
+    "should the Label show continuously, for the whole video,\n"
+    "or periodically, for a few seconds at regular intervals?"
+)
+WEAKENED_VISIBILITY_REPLIES = {
+    "no periodic option": (
+        VISIBILITY_QUESTION + " Without a preference, videos up to 60\nseconds show it continuously and longer ones periodically,",
+        "should the Label show continuously, for the whole video? Without a preference, videos up to 60 seconds show it continuously,",
+    ),
+    "no default given": (
+        "Without a preference, videos up to 60\nseconds show it continuously and longer ones periodically, so", "So",
+    ),
+    "no question": (VISIBILITY_QUESTION, "the Label can show continuously or periodically."),
+}
+
+
+@needs_ffmpeg
+def test_check_accepts_asking_when_a_video_shows_the_label(tmp_path):
+    scenario, project, digests, _ = video_project(tmp_path, "video-asks-visibility")
+
+    check(scenario, project, digests, ASKS_VISIBILITY_REPLY)
+
+
+@needs_ffmpeg
+@pytest.mark.parametrize("weakened", sorted(WEAKENED_VISIBILITY_REPLIES))
+def test_check_rejects_a_weak_visibility_question(tmp_path, weakened):
+    scenario, project, digests, _ = video_project(tmp_path, "video-asks-visibility")
+    old, new = WEAKENED_VISIBILITY_REPLIES[weakened]
+    assert old in ASKS_VISIBILITY_REPLY
+
+    with pytest.raises(AssertionError):
+        check(scenario, project, digests, ASKS_VISIBILITY_REPLY.replace(old, new))
+
+
+@needs_ffmpeg
+def test_check_rejects_labelling_a_video_before_the_visibility_is_settled(tmp_path, label_tool):
+    scenario, project, digests, video = video_project(tmp_path, "video-asks-visibility")
+    apply_video(label_tool, video)
+
+    with pytest.raises(AssertionError):
+        check(scenario, project, digests, ASKS_VISIBILITY_REPLY)

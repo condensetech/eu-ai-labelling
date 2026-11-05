@@ -1,0 +1,18 @@
+{
+  "description": "A video just over 60 seconds with no visibility preference: the default shows the Label periodically, from the start and again a minute in, and not in between.",
+  "files": {
+    "keynote.mp4": {
+      "video": {
+        "seconds": 65,
+        "size": "320x180",
+        "rate": 10
+      }
+    }
+  },
+  "prompt": "/eu-ai-labelling label keynote.mp4 as fully AI-generated. I don't need a preview, and I have no preference on when the label shows: use your defaults.",
+  "expect": {
+    "variant": "Fully AI-Generated",
+    "labelled": true,
+    "visibility": "periodic"
+  }
+}
