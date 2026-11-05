@@ -1808,6 +1808,16 @@ def rotation_of(stream: dict) -> int:
     return int(rotate) % 360 if rotate else 0
 
 
+def is_mirrored(stream: dict) -> bool:
+    """Whether the display matrix flips the picture: ffprobe reports a flip as a rotation too."""
+    for data in stream.get("side_data_list", []) or []:
+        rows = [line.split(":", 1)[1].split() for line in (data.get("displaymatrix") or "").strip().splitlines()]
+        if len(rows) >= 2:
+            (a, b, *_), (c, d, *_) = rows[:2]
+            return int(a) * int(d) - int(b) * int(c) < 0
+    return False
+
+
 def dynamic_range(stream: dict, frame_side_data: list) -> str:
     """sdr, hdr10, hlg, or an HDR profile this tool has not validated: hdr10plus, dolby_vision, other_hdr."""
     kinds = [d.get("side_data_type", "") for d in (stream.get("side_data_list") or [])] + frame_side_data
@@ -1875,16 +1885,14 @@ def is_constant_rate(times: list) -> bool:
 
 
 def disposition_of(stream: dict) -> dict:
-    disposition = stream.get("disposition") or {}
-    return {k: bool(v) for k, v in disposition.items() if k in ("default", "forced", "hearing_impaired",
-                                                              "visual_impaired", "captions", "descriptions",
-                                                              "dub", "original", "comment")}
+    """Every disposition flag ffprobe reports: all are mapped onto the copy and compared after rendering."""
+    return {k: bool(v) for k, v in (stream.get("disposition") or {}).items()}
 
 
 def stream_summary(stream: dict) -> dict:
     tags = stream.get("tags") or {}
     summary = {"index": stream["index"], "codec": stream.get("codec_name"), "codec_tag": stream.get("codec_tag_string"),
-               "language": tags.get("language"), "title": tags.get("title"),
+               "language": tags.get("language"), "title": tags.get("title") or tags.get("name"),  # MP4: `name`
                "disposition": disposition_of(stream), "start_time": number(stream.get("start_time"))}
     if stream.get("codec_type") == "audio":
         summary.update({"channels": stream.get("channels"), "channel_layout": stream.get("channel_layout"),
@@ -1936,7 +1944,7 @@ def inspect_video(path: Path, tools: dict | None = None) -> dict:
         "video": {
             "index": main["index"], "codec": main.get("codec_name"), "profile": main.get("profile"),
             "width": width, "height": height, "display_width": display[0], "display_height": display[1],
-            "rotation": rotation, "pix_fmt": main.get("pix_fmt"), "bit_depth": bit_depth(main.get("pix_fmt")),
+            "rotation": rotation, "mirrored": is_mirrored(main), "pix_fmt": main.get("pix_fmt"), "bit_depth": bit_depth(main.get("pix_fmt")),
             "frame_rate": main.get("r_frame_rate"), "average_frame_rate": main.get("avg_frame_rate"),
             "constant_frame_rate": is_constant_rate(times), "frames": len(times),
             "start_time": number(main.get("start_time")), "colour": colour,
@@ -1966,20 +1974,27 @@ WEBM_AUDIO = ("opus", "vorbis")
 H264_PIX_FMTS = ("yuv420p", "yuvj420p", "yuv422p", "yuv444p")
 X264 = {"codec": "h264", "codec_title": "H.264", "encoder": "libx264", "quality": "CRF 16",
         "encode": ["-preset", "medium", "-crf", "16"]}
+# The filters every render uses (render_command): the Label's padding and counter-rotation, and the overlay.
+RENDER_FILTERS = ["overlay", "pad", "null", "transpose", "hflip", "vflip", "setparams"]
+# What a path has been validated to keep beyond one audio track, an unrotated picture and constant timing:
+# `tracks` (several audio and subtitle tracks), `rotation` (by 90, 180 or 270 degrees), `variable_timing`.
+EVERY_CHARACTERISTIC = ("tracks", "rotation", "variable_timing")
 LABELLING_PATHS = [
     {
         "name": "mp4-h264-sdr",
         "description": "MP4 with an H.264 video stream in SDR, 8-bit 4:2:0, 4:2:2 or 4:4:4",
         "container": "mp4", **X264, "dynamic_range": ("sdr",), "pix_fmts": H264_PIX_FMTS, "muxer": "mp4",
         "audio": MP4_AUDIO, "subtitles": ("mov_text",),
-        "needs": {"decoders": ["h264"], "encoders": ["libx264"], "filters": ["overlay"], "muxers": ["mp4"]},
+        "preserves": EVERY_CHARACTERISTIC,
+        "needs": {"decoders": ["h264"], "encoders": ["libx264"], "filters": RENDER_FILTERS, "muxers": ["mp4"]},
     },
     {
         "name": "mov-h264-sdr",
         "description": "MOV (QuickTime) with an H.264 video stream in SDR, 8-bit 4:2:0, 4:2:2 or 4:4:4",
         "container": "mov", **X264, "dynamic_range": ("sdr",), "pix_fmts": H264_PIX_FMTS, "muxer": "mov",
         "audio": MOV_AUDIO, "subtitles": ("mov_text",),
-        "needs": {"decoders": ["h264"], "encoders": ["libx264"], "filters": ["overlay"], "muxers": ["mov"]},
+        "preserves": EVERY_CHARACTERISTIC,
+        "needs": {"decoders": ["h264"], "encoders": ["libx264"], "filters": RENDER_FILTERS, "muxers": ["mov"]},
     },
     {
         "name": "webm-vp9-sdr",
@@ -1988,7 +2003,8 @@ LABELLING_PATHS = [
         "encode": ["-crf", "20", "-b:v", "0", "-deadline", "good", "-cpu-used", "4", "-row-mt", "1"],
         "dynamic_range": ("sdr",), "pix_fmts": ("yuv420p",), "muxer": "webm",
         "audio": WEBM_AUDIO, "subtitles": ("webvtt",),
-        "needs": {"decoders": ["vp9"], "encoders": ["libvpx-vp9"], "filters": ["overlay"], "muxers": ["webm"]},
+        "preserves": (),  # not yet validated in WebM: these stop for a decision
+        "needs": {"decoders": ["vp9"], "encoders": ["libvpx-vp9"], "filters": RENDER_FILTERS, "muxers": ["webm"]},
     },
     {
         "name": "webm-vp8-sdr",
@@ -1998,7 +2014,8 @@ LABELLING_PATHS = [
         "encode": ["-crf", "10", "-b:v", "50M", "-deadline", "good", "-cpu-used", "4"],
         "dynamic_range": ("sdr",), "pix_fmts": ("yuv420p",), "muxer": "webm",
         "audio": WEBM_AUDIO, "subtitles": ("webvtt",),
-        "needs": {"decoders": ["vp8"], "encoders": ["libvpx"], "filters": ["overlay"], "muxers": ["webm"]},
+        "preserves": (),  # not yet validated in WebM: these stop for a decision
+        "needs": {"decoders": ["vp8"], "encoders": ["libvpx"], "filters": RENDER_FILTERS, "muxers": ["webm"]},
     },
 ]
 
@@ -2047,23 +2064,36 @@ def matching_path(info: dict) -> tuple[dict | None, list]:
 def stream_issues(info: dict, path: dict) -> list:
     """Streams and characteristics the path can't carry through unchanged."""
     found = []
-    if len(info["audio"]) > 1 or info["subtitles"] or info["other_streams"]:
+    if info["other_streams"]:
+        kinds = ", ".join(f"{s['type']} ({s['codec'] or s['codec_tag'] or 'unknown'})" for s in info["other_streams"])
         found.append(issue("additional_tracks",
-                           "It has more than one audio track, or subtitle or other tracks: this version labels "
-                           "videos with one video stream and at most one audio track, and won't drop the others."))
-    for audio in info["audio"][:1]:
-        if audio["codec"] not in path["audio"]:
-            found.append(issue("audio_not_validated",
-                               f"Its audio codec, {audio['codec']}, can't be copied into {path['container'].upper()} "
-                               f"unchanged: it would have to be converted."))
+                           f"Besides its video, audio and subtitles it has other streams: {kinds}. This version "
+                           f"can't carry them into the Labelled Copy, and won't drop them."))
+    for kind, code in (("audio", "audio_not_validated"), ("subtitles", "subtitles_not_validated")):
+        codecs = [t["codec"] for t in info[kind] if t["codec"] not in path[kind]]
+        if codecs:
+            found.append(issue(code, f"Its {kind} tracks ({', '.join(codecs)}) can't be copied into "
+                                     f"{path['container'].upper()} unchanged: they would have to be converted or "
+                                     f"dropped (copied unchanged: {', '.join(path[kind])})."))
+    container, preserves = path["container"].upper(), path["preserves"]
+    if "tracks" not in preserves and (len(info["audio"]) > 1 or info["subtitles"]):
+        found.append(issue("additional_tracks",
+                           f"It has more than one audio track, or subtitles: this version labels {container} videos "
+                           f"with at most one audio track and no subtitles, and won't drop the others."))
     video = info["video"]
-    if video["rotation"]:
+    if video["mirrored"] or video["rotation"] not in COUNTER_ROTATIONS:
+        turned = "mirrored" if video["mirrored"] else f"rotated by {video['rotation']} degrees"
         found.append(issue("rotation_not_validated",
-                           f"It is stored rotated by {video['rotation']} degrees, which this version doesn't label."))
-    if not video["constant_frame_rate"]:
+                           f"It is displayed {turned}, which this version doesn't label: it keeps a rotation by a "
+                           f"multiple of 90 degrees, and won't turn the stored picture."))
+    elif video["rotation"] and "rotation" not in preserves:
+        found.append(issue("rotation_not_validated",
+                           f"It is displayed rotated by {video['rotation']} degrees, which this version doesn't "
+                           f"label in {container}, and won't turn the stored picture."))
+    if not video["constant_frame_rate"] and "variable_timing" not in preserves:
         found.append(issue("variable_frame_rate_not_validated",
-                           "Its frames are not evenly spaced (variable frame rate), which this version doesn't "
-                           "label without normalising the timing."))
+                           f"Its frames are not evenly spaced (variable frame rate), which this version doesn't "
+                           f"label in {container} without normalising the timing."))
     return found
 
 
@@ -2140,19 +2170,43 @@ COLOUR_OPTIONS = (("primaries", "-color_primaries"), ("transfer", "-color_trc"),
 SETPARAMS_NAMES = {"primaries": "color_primaries", "transfer": "color_trc", "matrix": "colorspace", "range": "range"}
 
 
+# A rotated video keeps its stored pixels and display matrix: it is decoded
+# without autorotation, so the Label, placed on the picture as displayed, is
+# turned back the other way (filters) and placed where that corner is stored
+# (x, y from the displayed x, y, the stored main_w/main_h and the turned
+# Label's overlay_w/overlay_h). Keys are ffprobe rotations (counterclockwise).
+COUNTER_ROTATIONS = {
+    0: ("", "{x}", "{y}"),
+    90: ("transpose=clock,", "main_w-{y}-overlay_w", "{x}"),
+    180: ("hflip,vflip,", "main_w-{x}-overlay_w", "main_h-{y}-overlay_h"),
+    270: ("transpose=cclock,", "{y}", "main_h-{x}-overlay_h"),
+}
+
+
 def render_command(tools: dict, info: dict, path: dict, overlay: Path, position: tuple, staged: Path,
                    enable: str | None) -> list:
     x, y = position
+    turn, at_x, at_y = COUNTER_ROTATIONS[info["video"]["rotation"]]
     timing = f":enable='{enable}'" if enable else ""
     # A decoder may tag frames the source leaves untagged (VP8 frames come out BT.470BG): keep them untagged.
     untagged = [f"{name}=unknown" for key, name in SETPARAMS_NAMES.items()
                 if info["video"]["colour"].get(key) in (None, "unknown")]
     tags = f",setparams={':'.join(untagged)}" if untagged else ""
-    graph = f"[0:{info['video']['index']}][1:v]overlay=x={x}:y={y}:eof_action=repeat{timing}{tags}[labelled]"
-    argv = [tools["ffmpeg"], "-nostdin", "-v", "error", "-y", "-copyts", "-i", info["path"], "-i", overlay,
+    # Even sizes and positions: overlay rounds a subsampled picture's x and y down to even, which a
+    # counter-rotation would turn into a shift the other way on the displayed picture.
+    graph = (f"[1:v]pad=ceil(iw/2)*2:ceil(ih/2)*2:0:0:color=black@0,{turn}null[label];"
+             f"[0:{info['video']['index']}][label]overlay=x={at_x.format(x=x, y=y)}:y={at_y.format(x=x, y=y)}:"
+             f"eof_action=repeat{timing}{tags}[labelled]")
+    # -copyts keeps every timestamp, a start offset included; -fps_mode passthrough (below) keeps variable frame
+    # timing. -noautorotate keeps the stored picture, whose display matrix carries through.
+    argv = [tools["ffmpeg"], "-nostdin", "-v", "error", "-y", "-copyts", "-noautorotate", "-i", info["path"],
+            "-i", overlay,
             "-filter_complex", graph, "-map", "[labelled]"]
-    for stream in info["audio"] + info["subtitles"]:
-        argv += ["-map", f"0:{stream['index']}"]
+    for out, stream in enumerate(info["audio"] + info["subtitles"], start=1):  # each track by name, never by default
+        argv += ["-map", f"0:{stream['index']}", f"-map_metadata:s:{out}", f"0:s:{stream['index']}",
+                 f"-disposition:{out}", "+".join(k for k, v in stream["disposition"].items() if v) or "0"]
+        if stream["title"]:  # MP4 reads a title back as `name`, which its muxer doesn't write again
+            argv += [f"-metadata:s:{out}", f"title={stream['title']}"]
     argv += ["-c:v", path["encoder"], *path["encode"], "-pix_fmt", info["video"]["pix_fmt"]]
     for key, option in COLOUR_OPTIONS:
         value = info["video"]["colour"].get(key)
@@ -2267,6 +2321,9 @@ def validate_output(tools: dict, source: dict, staged: Path, box: tuple, visible
         check("dimensions", (out_v["display_width"], out_v["display_height"])
               == (src_v["display_width"], src_v["display_height"]),
               f"{out_v['display_width']}x{out_v['display_height']} as displayed"),
+        check("orientation", all(out_v[k] == src_v[k] for k in ("width", "height", "rotation", "mirrored")),
+              f"{out_v['width']}x{out_v['height']} stored, rotated by {out_v['rotation']} degrees"
+              + (", mirrored" if out_v["mirrored"] else "")),
         check("pixel_format", out_v["pix_fmt"] == src_v["pix_fmt"], f"{out_v['pix_fmt']}"),
         check("colour", all(out_v["colour"].get(k) == src_v["colour"].get(k)
                             for k in ("primaries", "transfer", "matrix", "range", "dynamic_range")),
@@ -2275,25 +2332,28 @@ def validate_output(tools: dict, source: dict, staged: Path, box: tuple, visible
     ]
     src_times = packet_times(tools["ffprobe"], Path(source["path"]), src_v["index"])
     out_times = packet_times(tools["ffprobe"], staged, out_v["index"])
-    if src_times and out_times and len(src_times) == len(out_times):
-        shift = [round(b - out_times[0] - (a - src_times[0]), 6) for a, b in zip(src_times, out_times)]
-        drift = max(abs(s) for s in shift)
+    if src_times and out_times and len(src_times) == len(out_times):  # absolute times: a start offset counts
+        drift = max(abs(round(b - a, 6)) for a, b in zip(src_times, out_times))
         checks.append(check("frame_timing", drift <= TIME_TOLERANCE_S, f"largest frame time shift {drift * 1000:.2f} ms"))
     else:
         checks.append(check("frame_timing", False, "frame times could not be compared"))
+    start = abs((out_v["start_time"] or 0) - (src_v["start_time"] or 0))
+    checks.append(check("start_time", start <= TIME_TOLERANCE_S, f"video starts at {out_v['start_time'] or 0:.3f} s"))
     src_d, out_d = source["container"]["duration"] or 0, out["container"]["duration"] or 0
     frame_s = 1 / (ratio(src_v["average_frame_rate"]) or 25)
     checks.append(check("duration", abs(out_d - src_d) <= max(0.05, frame_s), f"{out_d:.3f} s (source {src_d:.3f} s)"))
-    keys = ("codec", "channels", "sample_rate", "language", "disposition")
+    keys = ("codec", "channels", "sample_rate", "language", "title", "disposition")
     checks.append(compare_streams("audio_tracks", source["audio"], out["audio"], keys))
     checks.append(compare_streams("subtitle_tracks", source["subtitles"], out["subtitles"],
                                   ("codec", "language", "disposition", "title")))
 
     def offset(info, stream):  # a track's start relative to the video's: audio/video sync
         return (stream.get("start_time") or 0) - (info["video"]["start_time"] or 0)
-    sync = [abs(offset(out, b) - offset(source, a)) for a, b in zip(source["audio"], out["audio"])]
+    tracks = list(zip(source["audio"], out["audio"])) + list(zip(source["subtitles"], out["subtitles"]))
+    sync = [abs(offset(out, b) - offset(source, a)) for a, b in tracks]
     if sync:
-        checks.append(check("audio_sync", max(sync) <= TIME_TOLERANCE_S, f"largest shift {max(sync) * 1000:.2f} ms"))
+        checks.append(check("track_sync", max(sync) <= TIME_TOLERANCE_S,
+                            f"largest shift of an audio or subtitle track {max(sync) * 1000:.2f} ms"))
     checks.append(label_region_check(tools, Path(source["path"]), staged, visible_at, box, work))
     if hidden_at is not None:
         checks.append(label_region_check(tools, Path(source["path"]), staged, hidden_at, box, work, hidden=True))
@@ -2342,7 +2402,7 @@ def cmd_video_apply(args: argparse.Namespace) -> dict:
         else:
             colour, contrasts = args.colour, None
         overlay, plate_size, icon_px = label_overlay(args.variant, colour, icon_height, pad, work / "label.png")
-        x, y = icon_position(args.corner, display, plate_size, margin)
+        x, y = (v - v % 2 for v in icon_position(args.corner, display, plate_size, margin))  # see render_command
         box = (x, y, x + plate_size[0], y + plate_size[1])
         try:
             proc = run_tool(render_command(tools, info, path, overlay, (x, y), staged, visibility_enable(visibility, info)))

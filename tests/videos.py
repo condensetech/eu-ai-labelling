@@ -122,6 +122,69 @@ def scene_video(path: Path, seconds: float = 2, size: str = "320x180") -> Path:
     return path
 
 
+def tracked_mp4(path: Path, audio: list[dict] = (), subtitles: list[dict] = (), seconds: float = 2,
+                size: str = "320x180", video: Path | None = None, extra: tuple = ()) -> Path:
+    """An MP4 with AAC audio tracks and mov_text subtitles, each `{language, title, disposition, ...}`.
+
+    An audio track's `frequency` and `sample_rate` tell the tracks apart; a subtitle's `cues` are
+    `(start, end, text)`. With `video`, its first video stream is copied instead of a flat colour."""
+    args, maps, options = [], [], []
+    if video:
+        args += ["-i", video]
+        maps += ["-map", "0:v:0"]
+        options += ["-c:v", "copy"]
+    else:
+        args += ["-f", "lavfi", "-i", f"color=c=0x5aa0d2:s={size}:r=25:d={seconds}"]
+        maps += ["-map", "0:v:0"]
+        options += ["-c:v", "libx264", "-pix_fmt", "yuv420p"]
+    for n, track in enumerate(audio):
+        args += ["-f", "lavfi", "-i", f"sine=frequency={track.get('frequency', 440 * (n + 1))}:"
+                                      f"sample_rate={track.get('sample_rate', 48000)}:duration={seconds}"]
+        maps += ["-map", f"{len(maps) // 2}:a:0"]
+    for n, track in enumerate(subtitles):
+        srt = path.with_name(f"{path.stem}.{n}.srt")
+        cues = track.get("cues", [(0.2, 0.9, f"Line {n}"), (1.1, 1.8, f"Next {n}")])
+        srt.write_text("".join(f"{i}\n{stamp(a)} --> {stamp(b)}\n{text}\n\n" for i, (a, b, text) in enumerate(cues, 1)))
+        args += ["-i", srt]
+        maps += ["-map", f"{len(maps) // 2}:s:0"]
+    for kind, tracks in (("a", audio), ("s", subtitles)):
+        for n, track in enumerate(tracks):
+            for key in ("language", "title"):
+                if track.get(key):
+                    options += [f"-metadata:s:{kind}:{n}", f"{key}={track[key]}"]
+            options += [f"-disposition:{kind}:{n}", track.get("disposition", "0")]
+    ffmpeg(*args, *maps, *options, "-c:a", "aac", "-c:s", "mov_text", *extra, path)
+    return path
+
+
+def stamp(seconds: float) -> str:
+    whole, millis = divmod(round(seconds * 1000), 1000)
+    return f"00:00:{whole:02d},{millis:03d}"
+
+
+def rotated(source: Path, path: Path, degrees: int) -> Path:
+    """`source` with a display matrix rotating it by `degrees` on playback; the stored pixels are unchanged."""
+    ffmpeg("-display_rotation", str(degrees), "-i", source, "-map", "0", "-c", "copy", path)
+    return path
+
+
+def variable_rate_mp4(path: Path, rates: tuple = (30, 10, 24), size: str = "160x90", offset: float = 0.0,
+                      audio: bool = False) -> Path:
+    """Segments of one second each at different frame rates, kept as they are: a variable frame rate video
+    starting `offset` seconds into its timeline."""
+    args, chain = [], ""
+    for n, rate in enumerate(rates):
+        args += ["-f", "lavfi", "-i", f"color=c=0x5aa0d2:s={size}:r={rate}:d=1"]
+        chain += f"[{n}:v]"
+    maps = ["-map", "[v]"]
+    if audio:
+        args += ["-f", "lavfi", "-i", f"sine=frequency=440:sample_rate=48000:duration={len(rates)}"]
+        maps += ["-map", f"{len(rates)}:a:0", "-c:a", "aac"]
+    ffmpeg(*args, "-filter_complex", f"{chain}concat=n={len(rates)}:v=1[v]", *maps, "-fps_mode", "passthrough",
+           "-c:v", "libx264", "-pix_fmt", "yuv420p", "-output_ts_offset", str(offset), path)
+    return path
+
+
 # --- Fake tools on PATH ----------------------------------------------------------
 
 def tool_env(bin_dir: Path) -> dict:

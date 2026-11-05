@@ -212,3 +212,43 @@ def test_the_readme_names_the_validated_combinations():
     videos = section((REPO_ROOT / "README.md").read_text(), "Videos")
     assert "MP4 or MOV with H.264" in videos and "WebM with VP9 or VP8" in videos
     assert "never converted to MP4" in videos
+
+
+def test_tracks_rotation_and_variable_timing_are_labelled_as_the_reference_says(tmp_path):
+    from helpers import section
+    from videos import rotated, tracked_mp4, variable_rate_mp4
+
+    timing = variable_rate_mp4(tmp_path / "timing.mp4", rates=(30, 12), size="640x360", offset=0.25)
+    tracked = tracked_mp4(tmp_path / "tracked.mp4", video=timing,
+                          audio=[{"language": "eng", "disposition": "default"}, {"language": "ita"}],
+                          subtitles=[{"language": "fra", "disposition": "default+forced"}])
+    video = rotated(tracked, tmp_path / "clip.mp4", 90)
+    code, result = apply_as_written(tmp_path, video)
+
+    assert code == 0, result
+    listed = section(VIDEO_MD.read_text(), "What can be labelled")
+    for kept in ("any number of audio tracks", "`mov_text` subtitle tracks", "variable frame rate",
+                 "start offset", "rotation by 90, 180 or 270 degrees", "language, title and default, forced"):
+        assert kept in listed
+
+
+def test_a_stream_that_cant_be_kept_stops_with_an_issue_the_reference_explains(tmp_path):
+    video = flat_mp4(tmp_path / "clip.mp4", size="640x360", extra=("-timecode", "01:00:00:00"))
+    code, result = apply_as_written(tmp_path, video)
+
+    assert code != 0 and result["error"]["code"] == "preservation_unsupported"
+    when = step(VIDEO_MD.read_text(), "When it can't be labelled")
+    for found in result["error"]["issues"]:
+        assert f"`{found['code']}`" in when
+    for name in ("additional_tracks", "audio_not_validated", "subtitles_not_validated", "rotation_not_validated"):
+        assert f"`{name}`" in when
+    assert "never drop a track" in when
+
+
+def test_the_readme_says_what_a_video_copy_keeps_and_what_stops():
+    from helpers import REPO_ROOT, section
+
+    videos = section((REPO_ROOT / "README.md").read_text(), "Videos")
+    for said in ("every audio and subtitle track", "rotation", "variable frame rates", "mirrored picture",
+                 "timecode"):
+        assert said in videos
