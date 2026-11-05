@@ -9,7 +9,9 @@ from __future__ import annotations
 import os
 import subprocess
 
-from helpers import SKILL_DIR, SKILL_MD, doc_command, step
+import pytest
+
+from helpers import REPO_ROOT, SKILL_DIR, SKILL_MD, doc_command, section, step
 from videos import flat_mp4, needs_encoder, needs_ffmpeg, real_tools, without_tools
 
 pytestmark = needs_ffmpeg
@@ -61,15 +63,42 @@ def test_the_skill_routes_local_videos_and_keeps_urls_out():
     assert "video" in identify and "URL" in identify and "live stream" in identify
 
 
-def test_the_apply_command_runs_as_written(tmp_path):
+@pytest.mark.parametrize("visibility, timing", [("auto", []), ("continuous", []),
+                                                ("periodic", ["--window", "0.5", "--every", "1"])])
+def test_the_apply_command_runs_as_written(tmp_path, visibility, timing):
     video = flat_mp4(tmp_path / "clip.mp4", size="640x360")
     argv = doc_command("video.md", "video-apply", {"<video>": str(video), "<generated|modified>": "generated",
-                                                   "<tl|tr|bl|br>": "tr"})
+                                                   "<tl|tr|bl|br>": "tr", "<auto|continuous|periodic>": visibility})
 
-    code, result = run_doc(argv, tmp_path, real_tools(tmp_path / "bin"))
+    code, result = run_doc(argv + timing, tmp_path, real_tools(tmp_path / "bin"))
 
     assert code == 0, result
     assert result["labelled_copy"] == str(tmp_path / "clip.ai-label.mp4")
+    assert result["visibility"]["requested"] == visibility
+
+
+def test_the_reference_asks_for_the_visibility_and_states_the_defaults():
+    choose = step(VIDEO_MD.read_text(), "Choose when the Label shows")
+    assert "Unless the user already said, ask" in choose
+    assert "**continuously**" in choose and "**periodically**" in choose
+    assert "up to and including 60 seconds show it continuously" in choose
+    assert "5 seconds from the start and then for 5 seconds every 60 seconds" in choose
+    assert "not legal thresholds" in choose
+    assert "a list of chosen moments in the video isn't supported" in choose
+
+
+def test_the_reference_and_readme_no_longer_limit_the_length():
+    assert "60 seconds" not in section(VIDEO_MD.read_text(), "What can be labelled")
+    assert "of any length" in section(VIDEO_MD.read_text(), "What can be labelled")
+    videos = section((REPO_ROOT / "README.md").read_text(), "Videos")
+    assert "up to 60 seconds, with" not in videos
+    assert "periodically" in videos and "not legal thresholds" in videos
+
+
+def test_a_visibility_change_needs_a_fresh_approval():
+    approval = step(VIDEO_MD.read_text(), "Show it for approval")
+    assert "including to the visibility or its timing" in approval
+    assert "A changed copy needs approval again" in approval
 
 
 def test_the_reference_lists_exactly_the_validated_paths(tmp_path):
@@ -105,7 +134,8 @@ def test_the_references_step_runs_as_written_on_the_approved_copy(tmp_path):
     page.write_text(PLAYER)
     env = real_tools(tmp_path / "bin")
     code, result = run_doc(doc_command("video.md", "video-apply", {
-        "<video>": str(video), "<generated|modified>": "generated", "<tl|tr|bl|br>": "tr"}), project, env)
+        "<video>": str(video), "<generated|modified>": "generated", "<tl|tr|bl|br>": "tr",
+        "<auto|continuous|periodic>": "auto"}), project, env)
     assert code == 0, result
 
     code, result = run_doc(doc_command("video.md", "references", {
@@ -136,7 +166,7 @@ def test_a_creative_work_video_gets_no_caption():
 
 def apply_as_written(tmp_path, video):
     argv = doc_command("video.md", "video-apply", {"<video>": str(video), "<generated|modified>": "generated",
-                                                   "<tl|tr|bl|br>": "tr"})
+                                                   "<tl|tr|bl|br>": "tr", "<auto|continuous|periodic>": "auto"})
     return run_doc(argv, tmp_path, real_tools(tmp_path / "bin"))
 
 

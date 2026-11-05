@@ -35,7 +35,7 @@ When the user only asks whether a Label is required, answer as **Whether a Label
    - **Caption**: the Basic EU Icon and a text label below the image, in the document or page that shows it;
    - **Burn-in**: the EU Icon burned into a Labelled Copy.
 
-   When they already said how ("as a caption in post.md", "burn it in"), don't ask. For any other image, go on with burn-in; the preview (step 5 of `references/image.md`) lets the user switch to a caption. For a batch, ask once for every image it concerns. A **video** always carries the Label in its picture, Creative Work or not: don't offer it a caption, and skip this step for it (`references/video.md` settles its corner). Done when the placement of each image is settled.
+   When they already said how ("as a caption in post.md", "burn it in"), don't ask. For any other image, go on with burn-in; the preview (step 5 of `references/image.md`) lets the user switch to a caption. For a batch, ask once for every image it concerns. A **video** always carries the Label in its picture, Creative Work or not: don't offer it a caption, and skip this step for it (`references/video.md` settles its corner and when the Label shows). Done when the placement of each image is settled.
 4. **Label it**, following the reference file for its content type:
    - Image, labelled with a **Caption**: read `references/creative-work.md`.
    - Image (any image file; the reference says which formats are refused), labelled by burn-in: read `references/image.md`.

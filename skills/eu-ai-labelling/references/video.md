@@ -2,7 +2,7 @@
 
 Videos get the **Fully AI-Generated** (`generated`) or **Partially AI-Modified** (`modified`) EU Icon incorporated into the picture of a new video file, the **Labelled Copy** `<name>.ai-label.<ext>`, next to the original. The original file is never changed. Only local files are labelled: a URL to download or a live stream is out of scope, and so is audio on its own.
 
-The Label is the official EU Icon on an opaque **backing plate** (white behind a black icon, black behind a white one), at a fixed corner, with the same size and margin defaults as an image (`references/image.md`, **Defaults**), measured on the video as displayed. It stays at that corner, unchanged, for the whole video.
+The Label is the official EU Icon on an opaque **backing plate** (white behind a black icon, black behind a white one), at a fixed corner, with the same size and margin defaults as an image (`references/image.md`, **Defaults**), measured on the video as displayed. It stays at that corner, unchanged, and shows either for the whole video (**continuous**) or for a few seconds at a time, at regular intervals (**periodic**): step 4.
 
 ## Tools
 
@@ -10,14 +10,14 @@ Video work needs FFmpeg's `ffmpeg` and `ffprobe`, installed on the user's machin
 
 ## What can be labelled
 
-`video-tools` lists the validated labelling `paths`; this version has four. The container is read from the file itself, not its name: a MOV named `.mp4` is labelled as a MOV, and a Matroska file named `.webm` is not a WebM. Each path also needs one video stream in SDR at a constant frame rate, not stored rotated, up to 60 seconds long, with no audio or one audio track in the codecs listed, and no other tracks.
+`video-tools` lists the validated labelling `paths`; this version has four. The container is read from the file itself, not its name: a MOV named `.mp4` is labelled as a MOV, and a Matroska file named `.webm` is not a WebM. Each path also needs one video stream in SDR at a constant frame rate, not stored rotated, of any length, with no audio or one audio track in the codecs listed, and no other tracks.
 
 - **`mp4-h264-sdr`**: an MP4 file with H.264 video (8-bit 4:2:0, 4:2:2 or 4:4:4) and AAC, MP3, ALAC, AC-3, E-AC-3, Opus or FLAC audio. Re-encoded as H.264 with libx264, CRF 16.
 - **`mov-h264-sdr`**: a MOV (QuickTime) file with H.264 video (8-bit 4:2:0, 4:2:2 or 4:4:4) and AAC, MP3, ALAC, AC-3 or 16- or 24-bit PCM audio. Re-encoded as H.264 with libx264, CRF 16.
 - **`webm-vp9-sdr`**: a WebM file with VP9 video (8-bit 4:2:0) and Opus or Vorbis audio. Re-encoded as VP9 with libvpx-vp9, CRF 20.
 - **`webm-vp8-sdr`**: a WebM file with VP8 video (8-bit 4:2:0) and Opus or Vorbis audio. Re-encoded as VP8 with libvpx, CRF 10.
 
-Only these combinations are validated: another codec inside MOV or WebM (ProRes, AV1, HEVC, ...), another pixel format or another container (Matroska, AVI, ...) is not. A path is usable only when this FFmpeg build has what it needs: `video-tools` reports each path's `available` and `missing` (for example `encoder libvpx-vp9`). The copy keeps the container, the video codec, the dimensions, the frame timing and duration, the pixel format and colour tags, and keeps the original's file name extension; it is never converted to MP4. The audio track is copied as it is, without re-encoding. The video stream itself is re-encoded to incorporate the Label: never call the copy lossless or bit-identical. Anything else (another codec, HDR, more tracks, rotation, a variable frame rate, a longer video, a missing encoder) stops before rendering, as step 6 says: nothing is converted or dropped silently.
+Only these combinations are validated: another codec inside MOV or WebM (ProRes, AV1, HEVC, ...), another pixel format or another container (Matroska, AVI, ...) is not. A path is usable only when this FFmpeg build has what it needs: `video-tools` reports each path's `available` and `missing` (for example `encoder libvpx-vp9`). The copy keeps the container, the video codec, the dimensions, the frame timing and duration, the pixel format and colour tags, and keeps the original's file name extension; it is never converted to MP4. The audio track is copied as it is, without re-encoding. The video stream itself is re-encoded to incorporate the Label: never call the copy lossless or bit-identical. Anything else (another codec, HDR, more tracks, rotation, a variable frame rate, a missing encoder) stops before rendering, as step 7 says: nothing is converted or dropped silently.
 
 ## Steps
 
@@ -36,31 +36,40 @@ Only these combinations are validated: another codec inside MOV or WebM (ProRes,
    uv run <skill folder>/scripts/label_tool.py video-inspect <video>
    ```
 
-   It only reads the file, and prints its `container`, `video` (codec, dimensions as stored and as displayed, `rotation`, frame rate and whether it is constant, `pix_fmt`, `bit_depth` and `colour`, with its `dynamic_range`: `sdr`, `hdr10`, `hlg`, or another HDR profile), its `audio`, `subtitles` and `other_streams`, and `labelling`: whether it can be labelled (`supported`), on which `path`, and the `issues` in the way. Done when the command exits 0. If `supported` is false, go to step 6 with those `issues`. On an error, act on `error.code`:
+   It only reads the file, and prints its `container`, `video` (codec, dimensions as stored and as displayed, `rotation`, frame rate and whether it is constant, `pix_fmt`, `bit_depth` and `colour`, with its `dynamic_range`: `sdr`, `hdr10`, `hlg`, or another HDR profile), its `audio`, `subtitles` and `other_streams`, and `labelling`: whether it can be labelled (`supported`), on which `path`, and the `issues` in the way. Done when the command exits 0. If `supported` is false, go to step 7 with those `issues`. On an error, act on `error.code`:
    - `video_tools_missing`: go back to step 1.
    - `unreadable_video`: the file isn't a video ffprobe can read: tell the user what `error.message` says and stop.
    - `not_found`: find the file the user meant and run again.
 3. **Choose the corner.** Use the top-right (`tr`), as the Code of Practice suggests, unless the user named another corner. A Creative Work video (artistic, satirical or fictional) gets the same incorporated Label: there is no caption for a video; ask the user which corner they want only when they said they care where it goes. Done when the corner is settled.
-4. **Apply the Label.** Run:
+4. **Choose when the Label shows.** Unless the user already said, ask whether they want the Label shown **continuously**, for the whole video, or **periodically**, for a few seconds at regular intervals, and say what happens without a preference: videos up to and including 60 seconds show it continuously, longer ones for 5 seconds from the start and then for 5 seconds every 60 seconds. These are this plugin's product defaults, not legal thresholds. A Creative Work video gets the same choice. Map the answer to `--visibility`:
+   - no preference: `auto` (the default): continuous up to `--threshold` seconds (default 60), periodic beyond.
+   - continuously: `continuous`, whatever the length.
+   - periodically: `periodic`, whatever the length. `--window <s>` is how long each appearance lasts (default 5) and `--every <s>` the time from the start of one appearance to the start of the next (default 60); `--window` must be shorter than `--every`.
+
+   Only a window length and a recurrence can be set: a list of chosen moments in the video isn't supported. Done when the visibility is settled.
+5. **Apply the Label.** Run:
 
    ```
-   uv run <skill folder>/scripts/label_tool.py video-apply <video> --variant <generated|modified> --corner <tl|tr|bl|br>
+   uv run <skill folder>/scripts/label_tool.py video-apply <video> --variant <generated|modified> --corner <tl|tr|bl|br> --visibility <auto|continuous|periodic>
    ```
 
-   Add `--size <px>` (the icon's height, at least 24 px) or `--colour black|white` only for a user override; without them the tool takes the default size and the Icon Colour with the better contrast over sampled frames. It renders into a temporary file, checks the result, and only then replaces `<name>.ai-label.<ext>`. It prints `labelled_copy`, the parameters used (`variant`, `corner`, `colour`, `plate_box`), the `path` it took, `video` (what was kept, and the `note` naming the codec and encoder it re-encoded with) and `validation`: the `checks` made on the produced file itself (container, codec, dimensions, pixel format, colour, frame count and timing, duration, audio and subtitle tracks, audio sync, and that the Label region changed while the rest of the picture didn't). Done when the command exits 0 and `labelled_copy` exists. On an error, follow step 6.
-5. **Show it for approval.** Give the user the Labelled Copy's path to watch, with the corner, colour and size used, the `video.note` on re-encoding, and say the checks passed. Ask them to approve it or ask for a change.
-   - If they ask for a change, run `video-apply` again with it. It replaces the previous Labelled Copy and still leaves the original untouched. A changed copy needs approval again.
+   Add `--window <s>`, `--every <s>` or `--threshold <s>` only for the timing the user asked for in step 4. The first appearance starts with the first frame, measured on the playback timeline, and the last one ends with the video when less than a window remains: the video is never extended and no frame is added or moved.
+
+   Add `--size <px>` (the icon's height, at least 24 px) or `--colour black|white` only for a user override; without them the tool takes the default size and the Icon Colour with the better contrast over sampled frames. It renders into a temporary file, checks the result, and only then replaces `<name>.ai-label.<ext>`. It prints `labelled_copy`, the parameters used (`variant`, `corner`, `colour`, `plate_box`, and `visibility`: the `mode` used, the `requested` one, the `threshold` for `auto`, and for periodic display the `window` and `every`), the `path` it took, `video` (what was kept, and the `note` naming the codec and encoder it re-encoded with) and `validation`: the `checks` made on the produced file itself (container, codec, dimensions, pixel format, colour, frame count and timing, duration, audio and subtitle tracks, audio sync, and that the Label region changed while the rest of the picture didn't, and, for periodic display, that it is unchanged between appearances). Done when the command exits 0 and `labelled_copy` exists. On an error, follow step 7.
+6. **Show it for approval.** Give the user the Labelled Copy's path to watch, with the corner, colour, size and visibility used, the `video.note` on re-encoding, and say the checks passed. Ask them to approve it or ask for a change.
+   - If they ask for a change, including to the visibility or its timing, run `video-apply` again with it. It replaces the previous Labelled Copy and still leaves the original untouched. A changed copy needs approval again.
    - A Labelled Copy is **final** once the user approves it, or when they said beforehand that they don't need a preview. A preview waiver skips only the user's review: the tool's checks always run.
 
-   Done when the Labelled Copy is final. For a video inside the project, go on with step 7; for a file on its own, the Labelled Copy is the delivery.
-6. **When it can't be labelled as it is**, nothing was written, and the original and any previous Labelled Copy are unchanged. Act on `error.code`:
+   Done when the Labelled Copy is final. For a video inside the project, go on with step 8; for a file on its own, the Labelled Copy is the delivery.
+7. **When it can't be labelled as it is**, nothing was written, and the original and any previous Labelled Copy are unchanged. Act on `error.code`:
    - `preservation_unsupported` (or `labelling.supported` false in step 2): the video has characteristics this version can't keep. Tell the user, in plain words, what each entry of `issues` says, that nothing was converted or dropped, and ask how they want to proceed, for example converting the video themselves first. Don't convert anything on your own: a MOV or WebM is never turned into an MP4, and an HDR video is never turned into SDR. For a `capability_missing` issue, the video is on a validated path but this FFmpeg build lacks what it needs (named in the issue): tell the user, and offer to label it once they install a build that has it.
    - `render_failed`, `output_validation_failed`, `frame_extraction_failed`: tell the user what `error.message` says; the original and any previous Labelled Copy are unchanged.
    - `image_too_small`, `size_too_small`: the Label doesn't fit at that size: ask for another size, or stop when it was the default.
    - `labelled_copy`: the file is already a Labelled Copy: label its original instead.
    - `video_tools_missing`: go back to step 1.
-   - `not_found`, `usage`: fix the command and run again.
-7. **Point the project's players to it.** Only a final Labelled Copy (step 5) replaces references, and only one that `video-apply` just produced and the user approved: after a change, approve the new copy first. A video that failed, was refused or skipped, or is still waiting for approval, keeps every reference on the original; in a batch, run this step for each final copy only. Skip it when the user said to leave their pages alone, or the video is not inside the project. The project root is chosen as `references/update-references.md` says. Run:
+   - `usage`: fix the command and run again. For a timing setting `error.message` rejects (a window, recurrence or threshold that isn't a positive number of seconds, or a window not shorter than the recurrence), ask the user for another.
+   - `not_found`: fix the command and run again.
+8. **Point the project's players to it.** Only a final Labelled Copy (step 6) replaces references, and only one that `video-apply` just produced and the user approved: after a change, approve the new copy first. A video that failed, was refused or skipped, or is still waiting for approval, keeps every reference on the original; in a batch, run this step for each final copy only. Skip it when the user said to leave their pages alone, or the video is not inside the project. The project root is chosen as `references/update-references.md` says. Run:
 
    ```
    uv run <skill folder>/scripts/label_tool.py references <video> --root <project root> --apply
@@ -72,8 +81,8 @@ Only these combinations are validated: another codec inside MOV or WebM (ProRes,
    - `needs_hand_edit`: each `other` use, unchanged (an import, a framework component such as `<Video src>`, a `poster` or `data-` attribute, a data field): read it, and if it plays the video, change its path to its `replacement` by hand;
    - `not_updatable`, unchanged, with its `reason`: `dynamic` (a path built at run or build time), `external` (a URL on another host), `unresolved` (it leads to no file in the project) or `not_a_player` (an `<img>`, a `<source>` inside a `<picture>` or an `<audio>`, or a Markdown image: no video player shows it there, so leave it).
 
-   A second run finds nothing left: uses already pointing to the Labelled Copy are not uses of the original. Done when the command exits 0. On `usage`, drop `--wording`, `--alt-mention` and `--lang`: a video takes none. On `no_labelled_copy`, finish steps 4 and 5 first; on `labelled_copy`, pass its original; on `not_found`, find the video the user meant; on `outside_project`, check `--root`. On `overlapping_edits`, no page changed: edit the page named by hand.
+   A second run finds nothing left: uses already pointing to the Labelled Copy are not uses of the original. Done when the command exits 0. On `usage`, drop `--wording`, `--alt-mention` and `--lang`: a video takes none. On `no_labelled_copy`, finish steps 5 and 6 first; on `labelled_copy`, pass its original; on `not_found`, find the video the user meant; on `outside_project`, check `--root`. On `overlapping_edits`, no page changed: edit the page named by hand.
 
 ## Report
 
-Add to the report of `SKILL.md` step 5: the Labelled Copy's path, its Icon Variant and corner, what the copy kept (`video`), and that the video stream was re-encoded to incorporate the Label. After step 7, add **References updated** (each `applied` file and line, old path and new) and **References not updated** (each `needs_hand_edit` and `not_updatable` entry you didn't fix, with its file, line and reason in plain words). Say that only files in the project changed: a published site, a CMS or a copy uploaded elsewhere still shows the original until the user replaces it there.
+Add to the report of `SKILL.md` step 5: the Labelled Copy's path, its Icon Variant, corner and `visibility`, what the copy kept (`video`), and that the video stream was re-encoded to incorporate the Label. After step 8, add **References updated** (each `applied` file and line, old path and new) and **References not updated** (each `needs_hand_edit` and `not_updatable` entry you didn't fix, with its file, line and reason in plain words). Say that only files in the project changed: a published site, a CMS or a copy uploaded elsewhere still shows the original until the user replaces it there.

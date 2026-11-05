@@ -95,6 +95,7 @@ from __future__ import annotations
 import argparse
 import io
 import json
+import math
 import os
 import re
 import sys
@@ -2000,8 +2001,6 @@ LABELLING_PATHS = [
         "needs": {"decoders": ["vp8"], "encoders": ["libvpx"], "filters": ["overlay"], "muxers": ["webm"]},
     },
 ]
-# What this version can render beyond the path itself.
-MAX_CONTINUOUS_S = 60.0
 
 
 def labelling_path_status(path: dict, found: dict) -> dict:
@@ -2065,10 +2064,6 @@ def stream_issues(info: dict, path: dict) -> list:
         found.append(issue("variable_frame_rate_not_validated",
                            "Its frames are not evenly spaced (variable frame rate), which this version doesn't "
                            "label without normalising the timing."))
-    duration = info["container"]["duration"] or 0
-    if duration > MAX_CONTINUOUS_S:
-        found.append(issue("too_long",
-                           f"It lasts {duration:.1f} s: this version labels videos up to {MAX_CONTINUOUS_S:.0f} s."))
     return found
 
 
@@ -2154,7 +2149,7 @@ def render_command(tools: dict, info: dict, path: dict, overlay: Path, position:
                 if info["video"]["colour"].get(key) in (None, "unknown")]
     tags = f",setparams={':'.join(untagged)}" if untagged else ""
     graph = f"[0:{info['video']['index']}][1:v]overlay=x={x}:y={y}:eof_action=repeat{timing}{tags}[labelled]"
-    argv = [tools["ffmpeg"], "-nostdin", "-v", "error", "-y", "-i", info["path"], "-i", overlay,
+    argv = [tools["ffmpeg"], "-nostdin", "-v", "error", "-y", "-copyts", "-i", info["path"], "-i", overlay,
             "-filter_complex", graph, "-map", "[labelled]"]
     for stream in info["audio"] + info["subtitles"]:
         argv += ["-map", f"0:{stream['index']}"]
@@ -2168,6 +2163,60 @@ def render_command(tools: dict, info: dict, path: dict, overlay: Path, position:
     return argv
 
 
+# --- visibility -----------------------------------------------------------------
+
+# Product defaults, not legal thresholds: continuous display up to and
+# including DEFAULT_THRESHOLD_S, otherwise a DEFAULT_WINDOW_S window starting
+# every DEFAULT_EVERY_S from the first frame.
+VISIBILITY_MODES = (AUTO, "continuous", "periodic")
+DEFAULT_WINDOW_S, DEFAULT_EVERY_S, DEFAULT_THRESHOLD_S = 5.0, 60.0, 60.0
+
+
+def resolve_visibility(args: argparse.Namespace, duration: float) -> dict:
+    """The effective visibility settings, or `usage` for settings that can't be rendered.
+
+    Only the settings the requested mode uses are checked."""
+    def seconds(name: str) -> float:
+        value = getattr(args, name)
+        if not (math.isfinite(value) and value > 0):
+            raise LabelToolError("usage", f"--{name} must be a positive number of seconds, not {value:g}.")
+        return value
+
+    mode = args.visibility
+    settings = {"requested": mode}
+    if mode == AUTO:
+        settings["threshold"] = seconds("threshold")
+        mode = "continuous" if duration <= args.threshold else "periodic"
+    settings["mode"] = mode
+    if mode == "periodic":
+        settings |= {"window": seconds("window"), "every": seconds("every")}
+        if args.window >= args.every:
+            raise LabelToolError("usage", f"--window ({args.window:g} s) must be shorter than --every "
+                                          f"({args.every:g} s): otherwise the Label never hides.")
+    return settings
+
+
+def visibility_enable(visibility: dict, info: dict) -> str | None:
+    """The overlay's `enable` expression on the playback timeline (from the first frame), or None: always."""
+    if visibility["mode"] != "periodic":
+        return None
+    start = info["video"]["start_time"] or 0
+    # Rendering keeps the source timestamps (-copyts), so `t` starts at the first frame's time. The
+    # 0.1 ms nudge keeps a frame exactly on a window's start inside it despite float rounding.
+    return f"lt(mod(t-{start:.6f}+1e-4,{visibility['every']:g}),{visibility['window']:g})"
+
+
+def label_check_times(visibility: dict, info: dict) -> tuple[float, float | None]:
+    """A playback time when the Label shows, and one when it is hidden (None: no frame is)."""
+    duration = info["container"]["duration"] or 0
+    if visibility["mode"] != "periodic":
+        return min(0.5, duration / 2), None
+    window, every = visibility["window"], visibility["every"]
+    last_frame = duration - 1 / (ratio(info["video"]["average_frame_rate"]) or 25)
+    hidden_at = (window + min(every, last_frame)) / 2 if last_frame >= window else None
+    return min(0.5, window / 2, duration / 2), hidden_at
+
+
 # --- output validation ----------------------------------------------------------
 
 TIME_TOLERANCE_S = 0.002
@@ -2177,8 +2226,10 @@ def check(name: str, passed: bool, detail: str) -> dict:
     return {"check": name, "passed": bool(passed), "detail": detail}
 
 
-def label_region_check(tools: dict, source: Path, labelled: Path, at: float, box: tuple, work: Path) -> dict:
-    """Decode the same frame of both files: the Label region must change, the rest only by re-encoding noise."""
+def label_region_check(tools: dict, source: Path, labelled: Path, at: float, box: tuple, work: Path,
+                       hidden: bool = False) -> dict:
+    """Decode the same frame of both files: the Label region must change (stay unchanged when `hidden`),
+    the rest only by re-encoding noise."""
     from PIL import Image, ImageChops, ImageStat
 
     before = extract_frame(tools["ffmpeg"], source, at, work / "check-source.png")
@@ -2192,8 +2243,10 @@ def label_region_check(tools: dict, source: Path, labelled: Path, at: float, box
         mask = Image.new("L", diff.size, 255)
         mask.paste(0, box)
         outside = ImageStat.Stat(diff, mask).mean[0]
-    return check("label_region", inside > 20 and outside < 4,
-                 f"mean change {inside:.1f} inside the Label, {outside:.2f} outside it, at {at:.2f} s")
+    detail = f"mean change {inside:.1f} inside the Label, {outside:.2f} outside it, at {at:.2f} s"
+    if hidden:
+        return check("label_hidden", inside < 4 and outside < 4, detail)
+    return check("label_region", inside > 20 and outside < 4, detail)
 
 
 def compare_streams(name: str, before: list, after: list, keys: tuple) -> dict:
@@ -2202,7 +2255,8 @@ def compare_streams(name: str, before: list, after: list, keys: tuple) -> dict:
     return check(name, left == right, f"{len(after)} kept" if left == right else f"source {left}, copy {right}")
 
 
-def validate_output(tools: dict, source: dict, staged: Path, box: tuple, visible_at: float, work: Path) -> list:
+def validate_output(tools: dict, source: dict, staged: Path, box: tuple, visible_at: float, work: Path,
+                    hidden_at: float | None = None) -> list:
     """Checks of the produced file itself, independent of the checks before rendering."""
     out = inspect_video(staged, tools)
     src_v, out_v = source["video"], out["video"]
@@ -2241,6 +2295,8 @@ def validate_output(tools: dict, source: dict, staged: Path, box: tuple, visible
     if sync:
         checks.append(check("audio_sync", max(sync) <= TIME_TOLERANCE_S, f"largest shift {max(sync) * 1000:.2f} ms"))
     checks.append(label_region_check(tools, Path(source["path"]), staged, visible_at, box, work))
+    if hidden_at is not None:
+        checks.append(label_region_check(tools, Path(source["path"]), staged, hidden_at, box, work, hidden=True))
     return checks
 
 
@@ -2276,6 +2332,7 @@ def cmd_video_apply(args: argparse.Namespace) -> dict:
     target = labelled_copy_path(original)
     staged = target.with_name(f".{target.name}.{os.getpid()}.tmp")
     duration = info["container"]["duration"] or 0
+    visibility = resolve_visibility(args, duration)
     with tempfile.TemporaryDirectory(prefix="eu-ai-labelling-") as work:
         work = Path(work)
         if args.colour == AUTO:
@@ -2288,13 +2345,14 @@ def cmd_video_apply(args: argparse.Namespace) -> dict:
         x, y = icon_position(args.corner, display, plate_size, margin)
         box = (x, y, x + plate_size[0], y + plate_size[1])
         try:
-            proc = run_tool(render_command(tools, info, path, overlay, (x, y), staged, None))
+            proc = run_tool(render_command(tools, info, path, overlay, (x, y), staged, visibility_enable(visibility, info)))
             if proc.returncode != 0 or not staged.is_file():
                 detail = (proc.stderr or "").strip().splitlines()[-3:]
                 raise LabelToolError("render_failed",
                                      f"ffmpeg could not render {target.name}: {' '.join(detail) or 'no output'}. "
                                      "The original and any previous Labelled Copy are unchanged.")
-            checks = validate_output(tools, info, staged, box, min(0.5, duration / 2), work)
+            visible_at, hidden_at = label_check_times(visibility, info)
+            checks = validate_output(tools, info, staged, box, visible_at, work, hidden_at)
             failed = [c for c in checks if not c["passed"]]
             if failed:
                 raise LabelToolError(
@@ -2322,7 +2380,7 @@ def cmd_video_apply(args: argparse.Namespace) -> dict:
         "icon": {"x": x + pad, "y": y + pad, "width": icon_px[0], "height": icon_px[1]},
         "plate_box": {"x": x, "y": y, "width": plate_size[0], "height": plate_size[1]},
         "margin": margin,
-        "visibility": {"mode": "continuous"},
+        "visibility": visibility,
         "path": path["name"],
         "video": {
             "container": info["container"]["format"], "codec": video["codec"],
@@ -2425,6 +2483,15 @@ def build_parser() -> argparse.ArgumentParser:
                         help="the Icon Colour; the backing plate is the opposite colour (default: the better "
                              "contrast over sampled frames)")
     vapply.add_argument("--size", type=int, help="icon height in px (default: 6%% of the shorter side as displayed)")
+    vapply.add_argument("--visibility", default=AUTO, choices=VISIBILITY_MODES,
+                        help="when the Label shows: continuous, periodic, or auto: continuous up to --threshold "
+                             "seconds, periodic beyond it (default: auto)")
+    vapply.add_argument("--window", type=float, default=DEFAULT_WINDOW_S,
+                        help="periodic: seconds the Label shows each time (default: %(default)g)")
+    vapply.add_argument("--every", type=float, default=DEFAULT_EVERY_S,
+                        help="periodic: seconds between the starts of two windows (default: %(default)g)")
+    vapply.add_argument("--threshold", type=float, default=DEFAULT_THRESHOLD_S,
+                        help="auto: the longest video, in seconds, shown continuously (default: %(default)g)")
     vapply.set_defaults(handler=cmd_video_apply)
 
     return parser
