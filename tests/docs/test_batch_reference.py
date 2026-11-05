@@ -2,9 +2,11 @@
 
 The batch `score` command is taken verbatim from `references/batch.md` and the
 per-image `apply` command from `references/image.md` (only placeholders filled
-in), and both run from the user's project, never from the skill folder. How
-the agent asks about the batch and reports it is judged by the headless runs
-(tests/evals `mixed-event-folder`, tests/headless).
+in), and both run from the user's project, never from the skill folder. So
+does the listing command that discovers a batch's images and videos. How the
+agent asks about the batch and reports it is judged by the headless runs
+(tests/evals `mixed-event-folder`, `mixed-media-folder`, tests/headless); the
+wording those runs rely on is checked here.
 """
 
 from __future__ import annotations
@@ -14,7 +16,12 @@ from pathlib import Path
 import pytest
 from PIL import Image
 
-from helpers import PILL_ASPECT, SVG, animation, changed_box, doc_command, run_json, sha256
+from helpers import (
+    PILL_ASPECT, REPO_ROOT, SKILL_DIR, SKILL_MD, SVG, animation, changed_box, doc_command, run_json, section, sha256, step,
+)
+from videos import flat_mp4, needs_ffmpeg
+
+BATCH_MD = SKILL_DIR / "references" / "batch.md"
 
 
 def noise(size: tuple[int, int]) -> Image.Image:
@@ -47,7 +54,8 @@ SELECTION = [f"shots/{name}" for name in (
 
 def test_batch_score_command_run_from_the_users_project_judges_each_image(project):
     digests = {p.name: sha256(p) for p in (project / "shots").iterdir()}
-    argv = doc_command("batch.md", "score", {"<images>": SELECTION, "<generated|modified>": "generated"})
+    argv = doc_command("batch.md", "score", {"<images>": SELECTION, "<generated|modified>": "generated"},
+                       with_flag="--variant")
 
     code, report = run_json(argv, project)
 
@@ -73,7 +81,9 @@ def test_batch_path_labels_each_image_in_its_own_corner(project):
     shots = project / "shots"
     digests = {p.name: sha256(p) for p in shots.iterdir()}
     _, report = run_json(
-        doc_command("batch.md", "score", {"<images>": SELECTION, "<generated|modified>": "modified"}), project
+        doc_command("batch.md", "score", {"<images>": SELECTION, "<generated|modified>": "modified"},
+                    with_flag="--variant"),
+        project,
     )
 
     placed = {}
@@ -111,3 +121,68 @@ def test_batch_path_labels_each_image_in_its_own_corner(project):
     assert sorted(p.name for p in shots.iterdir() if p.name not in digests) == [
         "beach.ai-label.png", "market.ai-label.png", "night.ai-label.jpg",
     ]
+
+
+@needs_ffmpeg
+def test_the_listing_command_discovers_images_and_videos_and_skips_labelled_copies(project):
+    shots = project / "shots"
+    flat_mp4(shots / "intro.mp4", seconds=1)
+    flat_mp4(shots / "archive.mkv", seconds=1)
+    flat_mp4(shots / "teaser.ai-label.mp4", seconds=1)
+    (shots / "notes.md").write_text("# not media\n")
+    before = {p.name: sha256(p) for p in shots.iterdir()}
+    argv = doc_command("batch.md", "score", {"<files>": "shots"}, without_flag="--variant")
+
+    code, report = run_json(argv, project)
+
+    assert code == 0, report
+    assert sorted(Path(e["path"]).name for e in report["images"]) == ["beach.png", "crowd.png", "market.png", "night.jpg"]
+    assert {Path(e["path"]).name: e["media"] for e in report["videos"]} == {"archive.mkv": "video", "intro.mp4": "video"}
+    assert {Path(e["path"]).name: e["media"] for e in report["skipped"]} == {
+        "old.ai-label.png": "image", "teaser.ai-label.mp4": "video",
+    }
+    assert {p.name: sha256(p) for p in shots.iterdir()} == before
+
+
+def test_the_skill_lists_a_batch_with_the_listing_command():
+    identify = step(SKILL_MD.read_text(), "Identify the content")
+    assert "**Listing a batch**" in identify and "`references/batch.md`" in identify
+    listing = section(BATCH_MD.read_text(), "Listing a batch")
+    assert "glob" in listing and "directly inside" in listing
+    assert "`videos`" in listing and "`skipped`" in listing and "`media`" in listing
+
+
+def test_a_batchs_questions_cover_visibility_and_placement_in_one_message():
+    batch = section(SKILL_MD.read_text(), "A batch of files")
+    assert "Icon Variant" in batch and "visibility" in batch and "corner" in batch
+    assert "**Shared answers.**" in batch and "**Per-file exceptions.**" in batch
+    assert "Never ask again about a file whose answer is settled" in batch
+    assert "per video" in batch and "`auto`" in batch
+
+
+def test_each_video_in_a_batch_follows_its_own_reference_with_independent_outcomes():
+    videos = section(BATCH_MD.read_text(), "Videos in a batch")
+    assert "`references/video.md`" in videos
+    assert "its own `video-preview`" in videos and "its own corner" in videos
+    assert "never reuse one video's corner" in videos
+    assert "no caption" in videos  # a Creative Work video keeps an incorporated Label
+    # Support comes from each file's own inspection, never from a list kept for the batch.
+    assert "`video-inspect`" in videos and "never from its extension" in videos
+    assert "does not stop the batch" in videos and "never discards" in videos
+    assert "`preservation_unsupported`" in videos
+    assert "Rerender only the files the user names" in videos
+    assert "final" in videos and "step 8 of `references/video.md`" in videos
+
+
+def test_the_batch_report_lists_each_videos_settings_and_every_failure():
+    report = step(BATCH_MD.read_text(), "Report the batch")
+    assert "visibility" in report and "corner" in report
+    assert "**Failed:**" in report and "**Waiting:**" in report
+    assert "**Refused:**" in report and "**Skipped:**" in report
+    assert "retry" in report
+
+
+def test_the_readme_describes_batches_of_videos():
+    batches = section((REPO_ROOT / "README.md").read_text(), "Batches")
+    assert "video" in batches and "visibility" in batches
+    assert "the others" in batches and "retry" in batches

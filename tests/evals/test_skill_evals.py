@@ -5,7 +5,8 @@ project, the prompt to send and the behaviour expected back:
 
     {
       "description": "...",
-      "files": {"speech.png": {"image": [w, h]}, "post.md": {"text": "..."}},
+      "files": {"speech.png": {"image": [w, h]}, "post.md": {"text": "..."},
+                "clip.mp4": {"video": {"seconds": s, "size": "WxH"}}},   # encoded by the local ffmpeg
       "prompt": "/eu-ai-labelling ...",
       "expect": {
         "variant": "Fully AI-Generated" | "Partially AI-Modified" | "Basic",
@@ -95,7 +96,7 @@ Questions are asked once for the batch: shared answers are not asked again,
 and per-file questions name only the files that differ.
 
 `labelled` says whether a Labelled Copy (`<name>.ai-label.<ext>`) of each
-image must exist afterwards; when it must, it has to carry the `variant`
+image and each video (other than an existing Labelled Copy) must exist afterwards; when it must, it has to carry the `variant`
 icon, judged from its pixels. The files the scenario provides must keep
 their bytes either way. No reply may say whether the law requires a Label.
 
@@ -125,6 +126,7 @@ from label_checks import label_problems
 SCENARIOS_DIR = Path(__file__).resolve().parent / "scenarios"
 
 IMAGE_SUFFIXES = {".png", ".jpg", ".jpeg", ".webp"}
+VIDEO_SUFFIXES = {".mp4", ".mov", ".webm"}
 TEXT_SUFFIXES = {".md", ".markdown", ".html", ".htm", ".txt"}
 
 # Only the tests that run a scenario call the model; the checks on canned
@@ -148,6 +150,10 @@ def make_project(files: dict[str, dict]) -> Path:
         if "image" in spec:
             width, height = spec["image"]
             Image.new("RGB", (width, height), (200, 220, 240)).save(path)
+        elif "video" in spec:
+            from videos import flat_mp4
+
+            flat_mp4(path, **spec["video"])
         else:
             path.write_text(spec["text"])
     return project
@@ -259,6 +265,12 @@ def check(scenario: dict, project: Path, digests: dict[str, str], reply: str) ->
 
     for name in files:
         path = Path(name)
+        if path.suffix.lower() in VIDEO_SUFFIXES and not path.stem.lower().endswith(".ai-label"):
+            # A video's Labelled Copy must exist exactly when the scenario labels.
+            copy = (project / path).with_name(f"{path.stem}.ai-label{path.suffix}")
+            assert copy.exists() == expect["labelled"], (
+                f"Labelled Copy of {name} {'missing' if expect['labelled'] else 'written'}:\n{reply}"
+            )
         if path.suffix.lower() in IMAGE_SUFFIXES:
             copy = (project / path).with_name(f"{path.stem}.ai-label{path.suffix}")
             assert copy.exists() == expect["labelled"], (

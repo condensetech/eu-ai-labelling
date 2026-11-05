@@ -585,8 +585,9 @@ def cmd_score(args: argparse.Namespace) -> dict:
     return score_batch(paths, args.variant, args.size, args.prefer)
 
 
-# Files a folder is searched for: the formats `apply` labels, plus the image
-# formats it refuses, so that the batch can say why they were left out.
+# Images a folder is searched for: the formats `apply` labels, plus the image
+# formats it refuses, so that the batch can say why they were left out. A
+# folder is searched for videos too (VIDEO_SUFFIXES), listed for video-inspect.
 IMAGE_SUFFIXES = {
     ".png", ".jpg", ".jpeg", ".jpe", ".webp", ".gif", ".svg", ".svgz",
     ".bmp", ".tif", ".tiff", ".heic", ".heif", ".avif",
@@ -597,8 +598,13 @@ def is_labelled_copy(path: Path) -> bool:
     return path.stem.lower().endswith(LABELLED_INFIX)
 
 
-def folder_images(folder: Path) -> list[Path]:
-    """The images directly inside a folder: not its subfolders, nor hidden files.
+def media_of(path: Path) -> str:
+    """The reference a batch file goes to: `video` by its suffix, else `image`."""
+    return "video" if path.suffix.lower() in VIDEO_SUFFIXES else "image"
+
+
+def folder_media(folder: Path) -> list[Path]:
+    """The images and videos directly inside a folder: not its subfolders, nor hidden files.
 
     A link whose target is gone is kept, so that the batch reports it as `not_found`.
     """
@@ -606,21 +612,26 @@ def folder_images(folder: Path) -> list[Path]:
         p for p in folder.iterdir()
         if (p.is_file() or (p.is_symlink() and not p.exists()))
         and not p.name.startswith(".")
-        and p.suffix.lower() in IMAGE_SUFFIXES
+        and p.suffix.lower() in IMAGE_SUFFIXES | VIDEO_SUFFIXES
     )
 
 
 def score_batch(paths: list[Path], variant: str, size: int | None, prefer: str | None = None) -> dict:
-    """Score each listed file and each image in a listed folder, each path once."""
-    images, refused, skipped = [], [], []
+    """Score each listed image and each image in a listed folder, each path once.
+
+    Videos are listed under `videos`, unscored: each goes through `video-inspect`,
+    which alone says whether and how it can be labelled.
+    """
+    images, videos, refused, skipped = [], [], [], []
     seen = set()
     for given in paths:
         if given.is_dir():
-            found = folder_images(given)
+            found = folder_media(given)
             if not found:
+                message = f"No image or video found in {given}."
                 if len(paths) == 1:
-                    raise LabelToolError("no_images", f"No image found in {given}.")
-                refused.append({"path": str(given), "error": {"code": "no_images", "message": f"No image found in {given}."}})
+                    raise LabelToolError("no_images", message)
+                refused.append({"path": str(given), "error": {"code": "no_images", "message": message}})
             files = found
         else:
             files = [given]
@@ -629,14 +640,18 @@ def score_batch(paths: list[Path], variant: str, size: int | None, prefer: str |
             if key in seen:
                 continue
             seen.add(key)
+            media = media_of(path)
             if is_labelled_copy(path):
-                skipped.append({"path": str(path), "reason": "labelled_copy"})
-                continue
-            try:
-                images.append({"path": str(path), **score_image(path, variant, size, prefer)})
-            except LabelToolError as exc:
-                refused.append({"path": str(path), "error": {"code": exc.code, "message": exc.message}})
-    return {"images": images, "refused": refused, "skipped": skipped}
+                skipped.append({"path": str(path), "media": media, "reason": "labelled_copy"})
+            elif media == "video":
+                videos.append({"path": str(path), "media": media})
+            else:
+                try:
+                    images.append({"path": str(path), "media": media, **score_image(path, variant, size, prefer)})
+                except LabelToolError as exc:
+                    refused.append({"path": str(path), "media": media,
+                                    "error": {"code": exc.code, "message": exc.message}})
+    return {"images": images, "videos": videos, "refused": refused, "skipped": skipped}
 
 
 def score_image(path: Path, variant: str, size: int | None, prefer: str | None = None) -> dict:
@@ -2650,7 +2665,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     score = sub.add_parser("score", help="Judge each corner as a place for the Label.")
     score.add_argument("images", nargs="+", metavar="image",
-                       help="an image; or a folder, or several images, to judge as a batch")
+                       help="an image; or a folder, or several files, to judge as a batch (videos are listed, not judged)")
     score.add_argument("--variant", default="generated", choices=VARIANTS)
     score.add_argument("--size", type=int, help="icon height in px (default: 6%% of the shorter side)")
     score.add_argument("--prefer", choices=CORNERS,

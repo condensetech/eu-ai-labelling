@@ -1,0 +1,51 @@
+{
+  "description": "A folder of an image and short and long videos, one of unknown origin, plus an existing Labelled Copy: one message asks only about the unknown video, and nothing is labelled yet.",
+  "files": {
+    "launch/poster.png": {
+      "image": [
+        1200,
+        800
+      ]
+    },
+    "launch/teaser.mp4": {
+      "video": {
+        "seconds": 2,
+        "size": "640x360"
+      }
+    },
+    "launch/keynote.mp4": {
+      "video": {
+        "seconds": 65,
+        "size": "320x180",
+        "rate": 10
+      }
+    },
+    "launch/recap.mp4": {
+      "video": {
+        "seconds": 2,
+        "size": "640x360"
+      }
+    },
+    "launch/trailer.ai-label.mp4": {
+      "video": {
+        "seconds": 2,
+        "size": "640x360"
+      }
+    }
+  },
+  "prompt": "/eu-ai-labelling label everything in launch/. It all goes on our product page. poster.png, teaser.mp4 and keynote.mp4 were generated from scratch with AI models. recap.mp4 was cut by a colleague who's on holiday, so I don't know whether it was generated from scratch or is real footage edited with AI. I have no preference on when the label shows in the videos: use your defaults.",
+  "expect": {
+    "labelled": false,
+    "batch_questions": {
+      "about": [
+        "recap.mp4"
+      ],
+      "not_about": [
+        "poster.png",
+        "teaser.mp4",
+        "keynote.mp4",
+        "trailer.ai-label.mp4"
+      ]
+    }
+  }
+}
