@@ -256,3 +256,94 @@ def without_tools(tmp_path: Path) -> dict:
 
 def is_executable(path: Path) -> bool:
     return os.access(path, os.X_OK)
+
+
+# --- HDR10 -----------------------------------------------------------------------
+
+# A mastering display: Display P3 primaries, D65 white, 1000 to 0.0001 cd/m2, in x265's units
+# (chromaticities in 0.00002, luminance in 0.0001 cd/m2).
+MASTER_DISPLAY = "G(13250,34500)B(7500,3000)R(34000,16000)WP(15635,16450)L(10000000,1)"
+HDR10_TAGS = ("-color_primaries", "bt2020", "-color_trc", "smpte2084", "-colorspace", "bt2020nc", "-color_range", "tv")
+
+
+def hdr10_video(path: Path, seconds: float = 1, size: str = "640x360", source: str = "testsrc2",
+                max_cll: tuple | None = (1000, 400), mastering: bool = True, hdr10plus: Path | None = None,
+                audio: bool = False, primaries: str = "bt2020", extra: tuple = ()) -> Path:
+    """A real HDR10 video: 10-bit 4:2:0 HEVC Main 10 encoded by libx265 with PQ, BT.2020 and the HDR10
+    SEI messages (mastering display, content light levels; HDR10+ dynamic metadata from `hdr10plus`).
+    `source` is `testsrc2` (busy everywhere) or a colour (flat)."""
+    content = (f"testsrc2=s={size}:r=25:d={seconds}" if source == "testsrc2"
+               else f"color=c={source}:s={size}:r=25:d={seconds}")
+    params = ["log-level=error", f"colorprim={primaries}", "transfer=smpte2084", "colormatrix=bt2020nc"]
+    if mastering or max_cll or hdr10plus:
+        params.append("hdr10=1")
+    if mastering:
+        params.append(f"master-display={MASTER_DISPLAY}")
+    if max_cll:
+        params.append(f"max-cll={max_cll[0]},{max_cll[1]}")
+    if hdr10plus:
+        params.append(f"dhdr10-info={hdr10plus}")
+    args = ["-f", "lavfi", "-i", content]
+    if audio:
+        args += ["-f", "lavfi", "-i", f"sine=frequency=440:sample_rate=48000:duration={seconds}", "-c:a", "aac"]
+    ffmpeg(*args, "-vf", "format=yuv420p10le", "-c:v", "libx265", "-preset", "ultrafast",
+           "-x265-params", ":".join(params), *HDR10_TAGS, "-color_primaries", primaries, *extra, path)
+    return path
+
+
+def hdr10plus_info(path: Path, frames: int = 25) -> Path:
+    """An HDR10+ (SMPTE ST 2094-40) metadata file for x265's `dhdr10-info`, one scene of `frames` frames."""
+    scene = {
+        "BezierCurveData": {"Anchors": [102, 205, 307, 410, 512, 614, 717, 819, 922], "KneePointX": 0,
+                            "KneePointY": 0},
+        "LuminanceParameters": {"AverageRGB": 100, "MaxScl": [900, 900, 900], "LuminanceDistributions": {
+            "DistributionIndex": [1, 5, 10, 25, 50, 75, 90, 95, 99],
+            "DistributionValues": [0, 10, 20, 40, 80, 120, 300, 500, 800]}},
+        "NumberOfWindows": 1, "TargetedSystemDisplayMaximumLuminance": 400,
+    }
+    path.write_text(json.dumps({
+        "JSONInfo": {"HDR10plusProfile": "B", "Version": "1.0"},
+        "SceneInfo": [dict(scene, SceneFrameIndex=i, SceneId=0, SequenceFrameIndex=i) for i in range(frames)],
+        "SceneInfoSummary": {"SceneFirstFrameIndex": [0], "SceneFrameNumbers": [frames]},
+        "ToolInfo": {"Tool": "tests", "Version": "1"},
+    }))
+    return path
+
+
+def frame_side_data(path: Path) -> dict:
+    """The first frame's side data, by type, as ffprobe reports it."""
+    proc = subprocess.run(
+        [FFPROBE, "-v", "error", "-select_streams", "v:0", "-read_intervals", "%+#1",
+         "-show_entries", "frame=side_data_list:frame_side_data", "-of", "json", str(path)],
+        capture_output=True, text=True,
+    )
+    assert proc.returncode == 0, proc.stderr
+    frames = json.loads(proc.stdout)["frames"]
+    return {d["side_data_type"]: d for d in frames[0].get("side_data_list", [])}
+
+
+def planes_10bit(path: Path, index: int) -> tuple[list, list, list, tuple[int, int]]:
+    """Frame `index`'s Y, U and V planes as decoded 10-bit code values (no conversion), and its size."""
+    from array import array
+
+    stream = video_stream(path)
+    width, height = stream["width"], stream["height"]
+    proc = subprocess.run(
+        [FFMPEG, "-v", "error", "-i", str(path), "-map", "0:v:0", "-vf", f"select=eq(n\\,{index})", "-frames:v", "1",
+         "-f", "rawvideo", "-pix_fmt", "yuv420p10le", "-"],
+        capture_output=True,
+    )
+    assert proc.returncode == 0, proc.stderr.decode()
+    values = array("H")
+    values.frombytes(proc.stdout[: width * height * 3])  # 2 bytes a sample, chroma a quarter of luma each
+    luma, chroma = width * height, width * height // 4
+    return (list(values[:luma]), list(values[luma:luma + chroma]), list(values[luma + chroma:luma + 2 * chroma]),
+            (width, height))
+
+
+def pq_code(nits: float) -> float:
+    """The 10-bit limited-range code value of `nits` cd/m2 under the PQ transfer (SMPTE ST 2084)."""
+    m1, m2 = 2610 / 16384, 2523 / 4096 * 128
+    c1, c2, c3 = 3424 / 4096, 2413 / 4096 * 32, 2392 / 4096 * 32
+    y = (nits / 10000) ** m1
+    return 64 + 876 * ((c1 + c2 * y) / (1 + c3 * y)) ** m2

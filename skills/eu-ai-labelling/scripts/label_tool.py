@@ -1852,29 +1852,22 @@ def dynamic_range(stream: dict, frame_side_data: list) -> str:
 
 
 def first_frame_side_data(ffprobe: str, path: Path) -> list:
+    """The first video frame's side data, each entry with its `side_data_type` and fields."""
+    # `frame_side_data` names the entries' fields: `frame=side_data_list` alone lists them empty.
     proc = run_tool([ffprobe, "-v", "error", "-select_streams", "v:0", "-read_intervals", "%+#1",
-                     "-show_entries", "frame=side_data_list", "-of", "json", path], timeout=TOOL_TIMEOUT_S * 4)
+                     "-show_entries", "frame=side_data_list:frame_side_data", "-of", "json", path],
+                    timeout=TOOL_TIMEOUT_S * 4)
     try:
         frames = json.loads(proc.stdout or "{}").get("frames", [])
     except json.JSONDecodeError:
         return []
-    found = []
-    for frame in frames[:1]:
-        for data in frame.get("side_data_list", []) or []:
-            found.append(data.get("side_data_type", ""))
-    return found
+    return [d for d in (frames[0].get("side_data_list") or [] if frames else []) if isinstance(d, dict)]
 
 
-def hdr_metadata(ffprobe: str, path: Path) -> dict:
+def hdr_metadata(side_data: list) -> dict:
     """Mastering display and content light levels of the first frame, as ffprobe reports them."""
-    proc = run_tool([ffprobe, "-v", "error", "-select_streams", "v:0", "-read_intervals", "%+#1",
-                     "-show_entries", "frame=side_data_list", "-of", "json", path], timeout=TOOL_TIMEOUT_S * 4)
-    try:
-        frames = json.loads(proc.stdout or "{}").get("frames", [])
-    except json.JSONDecodeError:
-        return {}
     found = {}
-    for data in (frames[0].get("side_data_list", []) if frames else []) or []:
+    for data in side_data:
         kind = data.get("side_data_type", "")
         if kind == "Mastering display metadata":
             found["mastering_display"] = {k: v for k, v in data.items() if k != "side_data_type"}
@@ -1944,10 +1937,10 @@ def inspect_video(path: Path, tools: dict | None = None) -> dict:
     colour = {
         "primaries": main.get("color_primaries"), "transfer": main.get("color_transfer"),
         "matrix": main.get("color_space"), "range": main.get("color_range"),
-        "dynamic_range": dynamic_range(main, side),
+        "dynamic_range": dynamic_range(main, [d.get("side_data_type", "") for d in side]),
     }
     if colour["dynamic_range"] != "sdr":
-        colour["hdr_metadata"] = hdr_metadata(tools["ffprobe"], path)
+        colour["hdr_metadata"] = hdr_metadata(side)
     others = [s for s in probed["streams"] if s is not main]
     info = {
         "path": str(path),
@@ -1957,7 +1950,8 @@ def inspect_video(path: Path, tools: dict | None = None) -> dict:
             "start_time": number(fmt.get("start_time")), "size": int(fmt.get("size") or path.stat().st_size),
         },
         "video": {
-            "index": main["index"], "codec": main.get("codec_name"), "profile": main.get("profile"),
+            "index": main["index"], "codec": main.get("codec_name"), "codec_tag": main.get("codec_tag_string"),
+            "profile": main.get("profile"),
             "width": width, "height": height, "display_width": display[0], "display_height": display[1],
             "rotation": rotation, "mirrored": is_mirrored(main), "pix_fmt": main.get("pix_fmt"), "bit_depth": bit_depth(main.get("pix_fmt")),
             "frame_rate": main.get("r_frame_rate"), "average_frame_rate": main.get("avg_frame_rate"),
@@ -1994,6 +1988,15 @@ RENDER_FILTERS = ["overlay", "pad", "null", "transpose", "hflip", "vflip", "setp
 # What a path has been validated to keep beyond one audio track, an unrotated picture and constant timing:
 # `tracks` (several audio and subtitle tracks), `rotation` (by 90, 180 or 270 degrees), `variable_timing`.
 EVERY_CHARACTERISTIC = ("tracks", "rotation", "variable_timing")
+# HDR10: the Label's white is SDR reference white (ITU-R BT.2408, 203 cd/m2) in the PQ signal, its black stays
+# black; it is composited in 10-bit YUV, the video's transfer is never converted. The preview frames' SDR
+# rendering (`sdr_view`) also needs `lutrgb` and `colorchannelmixer`.
+REFERENCE_WHITE_NITS = 203
+HDR10_COLOUR = {"primaries": "bt2020", "transfer": "smpte2084", "matrix": "bt2020nc", "range": "tv"}
+PQ_FILTERS = ["format", "scale", "colorchannelmixer", "lutrgb"]
+# SMPTE ST 2084 (PQ): m1, m2, c1, c2, c3.
+PQ_CONSTANTS = (2610 / 16384, 2523 / 4096 * 128, 3424 / 4096, 2413 / 4096 * 32, 2392 / 4096 * 32)
+PQ_PIXEL_FORMATS = ["yuv420p10le", "yuva420p10le", "rgba64le", "rgb48le"]
 LABELLING_PATHS = [
     {
         "name": "mp4-h264-sdr",
@@ -2032,7 +2035,36 @@ LABELLING_PATHS = [
         "preserves": (),  # not yet validated in WebM: these stop for a decision
         "needs": {"decoders": ["vp8"], "encoders": ["libvpx"], "filters": RENDER_FILTERS, "muxers": ["webm"]},
     },
+    {
+        "name": "mp4-hevc-hdr10",
+        "description": ("MP4 with an HEVC Main 10 video stream in HDR10: 10-bit 4:2:0, BT.2020, PQ, limited range, "
+                        "with mastering display metadata"),
+        "container": "mp4", "codec": "hevc", "codec_title": "HEVC Main 10", "encoder": "libx265", "quality": "CRF 14",
+        "encode": ["-preset", "medium", "-crf", "14"],
+        "dynamic_range": ("hdr10",), "pix_fmts": ("yuv420p10le",), "colour": HDR10_COLOUR, "signal": "pq",
+        "overlay_format": "yuv420p10", "codec_tags": ("hvc1", "hev1"), "muxer": "mp4",
+        "audio": MP4_AUDIO, "subtitles": ("mov_text",),
+        "preserves": ("tracks",),  # rotation and variable timing are not yet validated in HDR10: they stop
+        "needs": {"decoders": ["hevc"], "encoders": ["libx265"], "filters": RENDER_FILTERS + PQ_FILTERS,
+                  "pixel_formats": PQ_PIXEL_FORMATS, "muxers": ["mp4"]},
+    },
 ]
+
+DYNAMIC_RANGE_TITLES = {"sdr": "SDR", "hdr10": "HDR10", "hlg": "HLG", "hdr10plus": "HDR10+",
+                        "dolby_vision": "Dolby Vision", "other_hdr": "HDR with an unrecognised transfer"}
+DYNAMIC_METADATA = {"hdr10plus": "HDR10+ dynamic metadata (SMPTE ST 2094-40)", "dolby_vision": "Dolby Vision metadata"}
+
+
+def pq_signal(nits: float) -> float:
+    """The PQ (SMPTE ST 2084) signal value, 0 to 1, of `nits` cd/m2."""
+    m1, m2, c1, c2, c3 = PQ_CONSTANTS
+    y = (nits / 10000) ** m1
+    return ((c1 + c2 * y) / (1 + c3 * y)) ** m2
+
+
+def limited_code(signal: float) -> float:
+    """A 0-1 signal as a 10-bit limited-range luma code value (64 to 940)."""
+    return 64 + 876 * signal
 
 
 def labelling_path_status(path: dict, found: dict) -> dict:
@@ -2065,15 +2097,31 @@ def matching_path(info: dict) -> tuple[dict | None, list]:
     dynamic = video["colour"]["dynamic_range"]
     for_range = [p for p in for_codec if dynamic in p["dynamic_range"]]
     if not for_range:
+        title = DYNAMIC_RANGE_TITLES.get(dynamic, dynamic)
+        kept = sorted({DYNAMIC_RANGE_TITLES[r] for p in for_codec for r in p["dynamic_range"]})
+        if dynamic == "sdr":
+            return None, [issue("codec_not_validated",
+                                f"Its video codec, {video['codec']}, has a validated labelling path in "
+                                f"{container.upper()} only for {', '.join(kept)} video, and it is SDR.")]
+        lost = (f" Re-encoding it would lose its {DYNAMIC_METADATA[dynamic]}, which this version can't carry "
+                f"into the Labelled Copy and won't drop." if dynamic in DYNAMIC_METADATA else "")
         return None, [issue("hdr_not_validated",
-                            f"It is {dynamic.upper()} video, and no validated path keeps {dynamic.upper()} for "
-                            f"{video['codec']} in {container.upper()}. It won't be converted to SDR.")]
+                            f"It is {title} video, and no validated path keeps {title} for {video['codec']} in "
+                            f"{container.upper()}.{lost} It won't be converted to SDR.")]
     for path in for_range:
         if video["pix_fmt"] in path["pix_fmts"]:
-            return path, []
-    return None, [issue("pixel_format_not_validated",
-                        f"Its pixel format, {video['pix_fmt']}, has no validated labelling path "
-                        f"(validated: {', '.join(for_range[0]['pix_fmts'])}).")]
+            break
+    else:
+        return None, [issue("pixel_format_not_validated",
+                            f"Its pixel format, {video['pix_fmt']}, has no validated labelling path "
+                            f"(validated: {', '.join(for_range[0]['pix_fmts'])}).")]
+    wrong = {k: video["colour"].get(k) for k, v in (path.get("colour") or {}).items() if video["colour"].get(k) != v}
+    if wrong:
+        return None, [issue("colour_not_validated",
+                            f"Its colour tags ({', '.join(f'{k} {v}' for k, v in wrong.items())}) are not those of "
+                            f"the validated {DYNAMIC_RANGE_TITLES[dynamic]} path (" + ", ".join(
+                                f"{k} {v}" for k, v in path["colour"].items()) + "). They won't be converted.")]
+    return path, []
 
 
 def stream_issues(info: dict, path: dict) -> list:
@@ -2109,6 +2157,10 @@ def stream_issues(info: dict, path: dict) -> list:
         found.append(issue("variable_frame_rate_not_validated",
                            f"Its frames are not evenly spaced (variable frame rate), which this version doesn't "
                            f"label in {container} without normalising the timing."))
+    if path.get("signal") == "pq" and "mastering_display" not in (video["colour"].get("hdr_metadata") or {}):
+        found.append(issue("hdr_metadata_missing",
+                           "It carries no mastering display metadata, so the Labelled Copy's HDR10 metadata can't "
+                           "be established from the source. This version won't guess it or drop the HDR."))
     return found
 
 
@@ -2133,14 +2185,43 @@ def path_named(name: str) -> dict:
 
 # --- rendering ------------------------------------------------------------------
 
-def extract_frame(ffmpeg: str, video: Path, at: float, target: Path) -> Path:
-    """The frame shown at `at` seconds into playback, as displayed (rotation applied), as PNG."""
+def sdr_view(path: dict) -> str | None:
+    """For a PQ path, the filters that render a decoded frame for viewing on an SDR display, else None.
+
+    PQ BT.2020 code values to linear light relative to reference white (203 cd/m2 shows as SDR white),
+    highlights above 0.8 of it rolled off towards white (Reinhard on the excess), BT.2020 to BT.709
+    primaries in linear light, then the sRGB curve. Only these PNGs are tone-mapped; never the copy."""
+    if path.get("signal") != "pq":
+        return None
+    m1, m2, c1, c2, c3 = PQ_CONSTANTS
+    knee = 0.8
+    linear = (f"st(0,pow(val/maxval,{1 / m2:.8f}));"
+              f"st(1,pow(max(ld(0)-{c1:.8f},0)/({c2:.8f}-{c3:.8f}*ld(0)),{1 / m1:.8f})*{10000 / REFERENCE_WHITE_NITS:.6f});"
+              f"st(2,if(lte(ld(1),{knee}),ld(1),{knee}+{1 - knee:.2f}*(ld(1)-{knee})/(ld(1)-{knee}+{1 - knee:.2f})));"
+              "clip(ld(2)*maxval,0,maxval)")
+    srgb = "st(0,val/maxval);clip(maxval*if(lte(ld(0),0.0031308),12.92*ld(0),1.055*pow(ld(0),1/2.4)-0.055),0,maxval)"
+    to_709 = ("rr=1.6605:rg=-0.5876:rb=-0.0728:gr=-0.1246:gg=1.1329:gb=-0.0083:"
+              "br=-0.0182:bg=-0.1006:bb=1.1187")
+    return (f"scale=in_color_matrix=bt2020:in_range=tv:out_range=pc,format=rgb48le,"
+            f"lutrgb=r='{linear}':g='{linear}':b='{linear}',colorchannelmixer={to_709},"
+            f"lutrgb=r='{srgb}':g='{srgb}':b='{srgb}',format=rgb24")
+
+
+def extract_frame(ffmpeg: str, video: Path, at: float, target: Path, view: str | None = None) -> Path:
+    """The frame shown at `at` seconds into playback, as displayed (rotation applied), as PNG; rendered
+    through the `view` filters when given (sdr_view)."""
     proc = run_tool([ffmpeg, "-nostdin", "-v", "error", "-y", "-ss", f"{at:.3f}", "-i", video,
-                     "-frames:v", "1", "-f", "image2", "-c:v", "png", target], timeout=TOOL_TIMEOUT_S * 4)
+                     "-frames:v", "1", *(["-vf", view] if view else []), "-f", "image2", "-c:v", "png", target],
+                    timeout=TOOL_TIMEOUT_S * 4)
     if proc.returncode != 0 or not target.is_file():
-        detail = (proc.stderr or "").strip().splitlines()[-1:] or ["no frame decoded"]
-        raise LabelToolError("frame_extraction_failed", f"Cannot decode the frame at {at:.2f} s: {detail[0]}")
+        raise frame_failure(at, proc.stderr)
     return target
+
+
+def frame_failure(at: float, stderr: str | bytes | None) -> LabelToolError:
+    text = stderr.decode(errors="replace") if isinstance(stderr, bytes) else (stderr or "")
+    detail = text.strip().splitlines()[-1:] or ["no frame decoded"]
+    return LabelToolError("frame_extraction_failed", f"Cannot decode the frame at {at:.2f} s: {detail[0]}")
 
 
 def sample_times(duration: float, count: int = 5) -> list:
@@ -2198,10 +2279,56 @@ COUNTER_ROTATIONS = {
 }
 
 
+def pq_label_filters() -> str:
+    """The Label's RGBA overlay mapped into the PQ signal: white to SDR reference white, black kept black, in
+    10-bit limited-range BT.2020 YUV. The Label is achromatic, so its grey levels need no gamut conversion."""
+    gain = f"{pq_signal(REFERENCE_WHITE_NITS):.5f}"
+    return (f"format=rgba64le,colorchannelmixer=rr={gain}:gg={gain}:bb={gain},"
+            "scale=out_color_matrix=bt2020:out_range=tv,format=yuva420p10le,")
+
+
+def output_hdr_metadata(info: dict, plate_size: tuple, display: tuple) -> dict:
+    """The HDR10 metadata the Labelled Copy declares. The mastering display is the source's: the Label
+    changes no grading. The Label adds pixels at reference white, so MaxCLL becomes at least that; MaxFALL
+    may rise by at most the plate's share of the picture at that level, so it is raised by that bound
+    (never above MaxCLL). A level the source leaves unknown (0) stays unknown, and a source without content
+    light levels gets none."""
+    source = info["video"]["colour"]["hdr_metadata"]
+    out = {"mastering_display": source["mastering_display"]}
+    light = source.get("content_light")
+    if light:
+        max_cll, max_fall = int(light.get("max_content") or 0), int(light.get("max_average") or 0)
+        if max_cll:
+            max_cll = max(max_cll, REFERENCE_WHITE_NITS)
+        if max_fall:
+            share = plate_size[0] * plate_size[1] / (display[0] * display[1])
+            max_fall = math.ceil(max_fall + share * REFERENCE_WHITE_NITS)
+            max_fall = min(max_fall, max_cll) if max_cll else max_fall
+        out["content_light"] = {"max_content": max_cll, "max_average": max_fall}
+    return out
+
+
+def x265_hdr10_params(hdr: dict) -> str:
+    """x265's HDR10 SEI settings for the Labelled Copy's `hdr` metadata (output_hdr_metadata)."""
+    md = hdr["mastering_display"]
+
+    def units(key, scale):
+        return round(ratio(str(md[key])) * scale)
+    chroma = "".join(f"{name}({units(p + '_x', 50000)},{units(p + '_y', 50000)})"
+                     for name, p in (("G", "green"), ("B", "blue"), ("R", "red"), ("WP", "white_point")))
+    params = ["log-level=error", "hdr10=1",
+              f"master-display={chroma}L({units('max_luminance', 10000)},{units('min_luminance', 10000)})"]
+    light = hdr.get("content_light")
+    if light:
+        params.append(f"max-cll={light['max_content']},{light['max_average']}")
+    return ":".join(params)
+
+
 def render_command(tools: dict, info: dict, path: dict, overlay: Path, position: tuple, staged: Path,
-                   enable: str | None, excerpt: tuple | None = None) -> list:
+                   enable: str | None, excerpt: tuple | None = None, hdr: dict | None = None) -> list:
     """The ffmpeg command for the Labelled Copy or, with `excerpt` (start, seconds on the playback
-    timeline), a video-only excerpt of it rendered the same way and keeping the source's timestamps."""
+    timeline), a video-only excerpt of it rendered the same way and keeping the source's timestamps.
+    `hdr` is what an HDR10 copy declares and shows (draw_label), for a path with a PQ signal."""
     x, y = position
     turn, at_x, at_y = COUNTER_ROTATIONS[info["video"]["rotation"]]
     timing = f":enable='{enable}'" if enable else ""
@@ -2209,11 +2336,14 @@ def render_command(tools: dict, info: dict, path: dict, overlay: Path, position:
     untagged = [f"{name}=unknown" for key, name in SETPARAMS_NAMES.items()
                 if info["video"]["colour"].get(key) in (None, "unknown")]
     tags = f",setparams={':'.join(untagged)}" if untagged else ""
+    signal = pq_label_filters() if path.get("signal") == "pq" else ""
+    # overlay converts both pictures to its `format`, 8-bit 4:2:0 by default: a 10-bit path names its own.
+    blend = f":format={path['overlay_format']}" if path.get("overlay_format") else ""
     # Even sizes and positions: overlay rounds a subsampled picture's x and y down to even, which a
     # counter-rotation would turn into a shift the other way on the displayed picture.
-    graph = (f"[1:v]pad=ceil(iw/2)*2:ceil(ih/2)*2:0:0:color=black@0,{turn}null[label];"
+    graph = (f"[1:v]{signal}pad=ceil(iw/2)*2:ceil(ih/2)*2:0:0:color=black@0,{turn}null[label];"
              f"[0:{info['video']['index']}][label]overlay=x={at_x.format(x=x, y=y)}:y={at_y.format(x=x, y=y)}:"
-             f"eof_action=repeat{timing}{tags}[labelled]")
+             f"eof_action=repeat{blend}{timing}{tags}[labelled]")
     # -copyts keeps every timestamp, a start offset included; -fps_mode passthrough (below) keeps variable frame
     # timing. -noautorotate keeps the stored picture, whose display matrix carries through.
     trim = ["-ss", f"{excerpt[0]:.3f}", "-t", f"{excerpt[1]:.3f}"] if excerpt else []
@@ -2226,6 +2356,10 @@ def render_command(tools: dict, info: dict, path: dict, overlay: Path, position:
         if stream["title"]:  # MP4 reads a title back as `name`, which its muxer doesn't write again
             argv += [f"-metadata:s:{out}", f"title={stream['title']}"]
     argv += ["-c:v", path["encoder"], *path["encode"], "-pix_fmt", info["video"]["pix_fmt"]]
+    if info["video"].get("codec_tag") in path.get("codec_tags", ()):  # hvc1 or hev1, as the source has it
+        argv += ["-tag:v", info["video"]["codec_tag"]]
+    if hdr:  # explicit: otherwise libx265 copies the source's levels, which the Label may exceed
+        argv += ["-x265-params", x265_hdr10_params(hdr["metadata"])]
     for key, option in COLOUR_OPTIONS:
         value = info["video"]["colour"].get(key)
         if value and value != "unknown":
@@ -2292,6 +2426,9 @@ def label_check_times(visibility: dict, info: dict) -> tuple[float, float | None
 # --- output validation ----------------------------------------------------------
 
 TIME_TOLERANCE_S = 0.002
+# HDR10, in 10-bit code values: the mean change and level shift outside the Label that re-encoding may cause,
+# and how far the backing plate may sit from its PQ level (about 5% in luminance at reference white).
+HDR_MEAN_CHANGE, HDR_BIAS, LEVEL_TOLERANCE = 3.0, 1.0, 6
 
 
 def check(name: str, passed: bool, detail: str) -> dict:
@@ -2321,6 +2458,75 @@ def label_region_check(tools: dict, source: Path, labelled: Path, at: float, box
     return check("label_region", inside > 20 and outside < 4, detail)
 
 
+def planes_10bit(ffmpeg: str, video: Path, at: float, size: tuple) -> tuple[list, list, list]:
+    """The Y, U and V planes of the frame shown at `at` seconds, as decoded 10-bit 4:2:0 code values."""
+    from array import array
+    import subprocess
+
+    proc = subprocess.run([ffmpeg, "-nostdin", "-v", "error", "-noautorotate", "-ss", f"{at:.3f}", "-i", str(video),
+                           "-frames:v", "1", "-f", "rawvideo", "-pix_fmt", "yuv420p10le", "-"],
+                          capture_output=True, timeout=TOOL_TIMEOUT_S * 4)
+    luma, chroma = size[0] * size[1], size[0] * size[1] // 4
+    if proc.returncode != 0 or len(proc.stdout) < 2 * (luma + 2 * chroma):
+        raise frame_failure(at, proc.stderr)
+    values = array("H")
+    values.frombytes(proc.stdout[: 2 * (luma + 2 * chroma)])
+    if sys.byteorder != "little":
+        values.byteswap()
+    return list(values[:luma]), list(values[luma:luma + chroma]), list(values[luma + chroma:])
+
+
+def light_levels(metadata: dict) -> tuple:
+    """(MaxCLL, MaxFALL), 0 for unknown or not declared."""
+    light = metadata.get("content_light") or {}
+    return int(light.get("max_content") or 0), int(light.get("max_average") or 0)
+
+
+def mastering_values(metadata: dict) -> dict:
+    """The mastering display's chromaticities and luminances as numbers, from ffprobe's fractions."""
+    return {k: round(ratio(str(v)) or 0, 5) for k, v in (metadata.get("mastering_display") or {}).items()}
+
+
+def hdr_checks(tools: dict, source: dict, out: dict, staged: Path, box: tuple, at: float, hdr: dict) -> list:
+    """HDR10 checks of the produced file: its declared metadata, and its decoded 10-bit picture."""
+    expected, found = hdr["metadata"], out["video"]["colour"].get("hdr_metadata") or {}
+    same = (mastering_values(found) == mastering_values(expected) and mastering_values(found)
+            and light_levels(found) == light_levels(expected))
+    checks = [check("hdr_metadata", same,
+                    f"mastering display {'kept' if mastering_values(found) == mastering_values(expected) else 'changed'}, "
+                    f"MaxCLL/MaxFALL {light_levels(found)} (expected {light_levels(expected)})")]
+    width, height = source["video"]["width"], source["video"]["height"]
+    before = planes_10bit(tools["ffmpeg"], Path(source["path"]), at, (width, height))
+    after = planes_10bit(tools["ffmpeg"], staged, at, (width, height))
+    left, top, right, bottom = box
+    shifts = []
+    for plane, (a, b) in enumerate(zip(before, after)):
+        scale = 1 if plane == 0 else 2
+        w = width // scale
+        outside = [y - x for i, (x, y) in enumerate(zip(a, b))
+                   if not (left // scale <= i % w < -(-right // scale) and top // scale <= i // w < -(-bottom // scale))]
+        shifts.append((sum(abs(d) for d in outside) / len(outside), sum(outside) / len(outside)))
+    mean_change, worst_bias = max(s[0] for s in shifts), max(abs(s[1]) for s in shifts)
+    # x265 re-encoding moves a sample by about a code value on average; a transfer or range conversion
+    # shifts levels by tens.
+    checks.append(check("hdr_picture", mean_change <= HDR_MEAN_CHANGE and worst_bias <= HDR_BIAS,
+                        f"outside the Label, 10-bit samples changed by {mean_change:.2f} code values on average, "
+                        f"with a level shift of {worst_bias:.2f}, at {at:.2f} s"))
+    a, b = before[0], after[0]
+    label = [b[row * width + col] for row in range(top, bottom) for col in range(left, right)
+             if abs(b[row * width + col] - a[row * width + col]) > 40]  # the plate's rounded corners show the source
+    band = sorted(b[row * width + left + hdr["pad"] // 2]
+                  for row in range(top + (bottom - top) // 3, top + 2 * (bottom - top) // 3))
+    plate = band[len(band) // 2] if band else None
+    peak = max(label) if label else None
+    checks.append(check("label_level", plate is not None and abs(plate - hdr["plate_code"]) <= LEVEL_TOLERANCE
+                        and peak is not None  # the plate or the Icon is white: neither dim nor at peak
+                        and abs(peak - hdr["white_code"]) <= 2 * LEVEL_TOLERANCE,
+                        f"backing plate at code value {plate} (expected {hdr['plate_code']}), brightest Label sample "
+                        f"{peak} (reference white {hdr['white_code']})"))
+    return checks
+
+
 def compare_streams(name: str, before: list, after: list, keys: tuple) -> dict:
     left = [{k: s.get(k) for k in keys} for s in before]
     right = [{k: s.get(k) for k in keys} for s in after]
@@ -2328,8 +2534,9 @@ def compare_streams(name: str, before: list, after: list, keys: tuple) -> dict:
 
 
 def validate_output(tools: dict, source: dict, staged: Path, box: tuple, visible_at: float, work: Path,
-                    hidden_at: float | None = None) -> list:
-    """Checks of the produced file itself, independent of the checks before rendering."""
+                    hidden_at: float | None = None, hdr: dict | None = None) -> list:
+    """Checks of the produced file itself, independent of the checks before rendering. `hdr` is what an
+    HDR10 copy must declare and show (draw_label)."""
     out = inspect_video(staged, tools)
     src_v, out_v = source["video"], out["video"]
     checks = [
@@ -2375,6 +2582,8 @@ def validate_output(tools: dict, source: dict, staged: Path, box: tuple, visible
     checks.append(label_region_check(tools, Path(source["path"]), staged, visible_at, box, work))
     if hidden_at is not None:
         checks.append(label_region_check(tools, Path(source["path"]), staged, hidden_at, box, work, hidden=True))
+    if hdr:
+        checks += hdr_checks(tools, source, out, staged, box, visible_at, hdr)
     return checks
 
 
@@ -2416,7 +2625,8 @@ def draw_label(args: argparse.Namespace, plan: dict, work: Path) -> dict:
     """The Label as `video-apply` incorporates it: Icon Colour, overlay PNG and position."""
     tools, original, display, margin = plan["tools"], plan["original"], plan["display"], plan["margin"]
     if args.colour == AUTO:
-        frames = [extract_frame(tools["ffmpeg"], original, t, work / f"sample-{i}.png")
+        # An HDR video's contrast is judged on its SDR rendering, as the preview frames show it.
+        frames = [extract_frame(tools["ffmpeg"], original, t, work / f"sample-{i}.png", sdr_view(plan["path"]))
                   for i, t in enumerate(sample_times(plan["duration"]))]
         colour, contrasts = choose_colour(frames, args.corner, display, plan["footprint"], margin)
     else:
@@ -2424,8 +2634,13 @@ def draw_label(args: argparse.Namespace, plan: dict, work: Path) -> dict:
     overlay, plate_size, icon_px = label_overlay(args.variant, colour, plan["icon_height"], plan["pad"],
                                                  work / "label.png")
     x, y = (v - v % 2 for v in icon_position(args.corner, display, plate_size, margin))  # see render_command
-    return {"colour": colour, "contrast": contrasts, "overlay": overlay, "position": (x, y),
-            "box": (x, y, x + plate_size[0], y + plate_size[1]),
+    box = (x, y, x + plate_size[0], y + plate_size[1])
+    hdr = None
+    if plan["path"].get("signal") == "pq":
+        hdr = {"metadata": output_hdr_metadata(plan["info"], plate_size, display), "pad": plan["pad"],
+               "plate_code": round(limited_code(pq_signal(REFERENCE_WHITE_NITS)) if colour == "black" else 64, 1),
+               "white_code": round(limited_code(pq_signal(REFERENCE_WHITE_NITS)), 1)}
+    return {"colour": colour, "contrast": contrasts, "overlay": overlay, "position": (x, y), "box": box, "hdr": hdr,
             "enable": visibility_enable(plan["visibility"], plan["info"]),
             "settings": {
                 "variant": args.variant, "corner": args.corner, "colour": colour, "plate": True,
@@ -2450,14 +2665,14 @@ def cmd_video_apply(args: argparse.Namespace) -> dict:
         box = label["box"]
         try:
             proc = run_tool(render_command(tools, info, path, label["overlay"], label["position"], staged,
-                                           label["enable"]))
+                                           label["enable"], hdr=label["hdr"]))
             if proc.returncode != 0 or not staged.is_file():
                 detail = (proc.stderr or "").strip().splitlines()[-3:]
                 raise LabelToolError("render_failed",
                                      f"ffmpeg could not render {target.name}: {' '.join(detail) or 'no output'}. "
                                      "The original and any previous Labelled Copy are unchanged.")
             visible_at, hidden_at = label_check_times(visibility, info)
-            checks = validate_output(tools, info, staged, box, visible_at, work, hidden_at)
+            checks = validate_output(tools, info, staged, box, visible_at, work, hidden_at, hdr=label["hdr"])
             failed = [c for c in checks if not c["passed"]]
             if failed:
                 raise LabelToolError(
@@ -2487,6 +2702,15 @@ def cmd_video_apply(args: argparse.Namespace) -> dict:
                      f"({path['quality']}) to incorporate the Label, so the copy "
                      "is not bit-identical to the original. Audio and subtitle tracks were copied without "
                      "re-encoding."),
+            **({"hdr": {
+                "dynamic_range": "hdr10", "label_white_nits": REFERENCE_WHITE_NITS,
+                "metadata": label["hdr"]["metadata"],
+                "note": (f"The copy stays HDR10: 10-bit, BT.2020, PQ. The Label's white is at {REFERENCE_WHITE_NITS} "
+                         "cd/m2 (SDR reference white), its black at 0. The mastering display metadata is the "
+                         "source's; MaxCLL is at least the Label's white and MaxFALL was raised by the most the "
+                         "Label can add. The checks measured the decoded 10-bit values; no HDR display was used, "
+                         "so how the copy looks in HDR is not verified."),
+            }} if label["hdr"] else {}),
         },
         "validation": {"passed": True, "checks": checks},
     }
@@ -2508,6 +2732,14 @@ EXCERPT_NOTE = (
     "Each excerpt is rendered as video-apply renders the Labelled Copy with these settings: the same Icon "
     "Variant, Icon Colour, size, position, backing plate and visibility timing, on the source's timestamps. "
     "Excerpts carry the video only, without audio or subtitles."
+)
+
+HDR_PREVIEW_NOTE = (
+    "This is HDR10 video. The frames are SDR renderings, tone-mapped for viewing: reference white (203 cd/m2) "
+    "shows as near white and brighter highlights are compressed. They show content and layout for choosing a "
+    "corner, not how the video looks in HDR. The excerpts are HDR10 like the Labelled Copy, with the Label at "
+    "reference white; on an SDR display or player they don't show HDR appearance either. Only an HDR display "
+    "can, and the tool has not checked one."
 )
 
 
@@ -2576,7 +2808,8 @@ def render_excerpt(plan: dict, label: dict, span: tuple, target: Path) -> int:
     staged = target.with_name(f".{target.name}.{os.getpid()}.tmp")
     try:
         proc = run_tool(render_command(tools, info, plan["path"], label["overlay"], label["position"], staged,
-                                       label["enable"], excerpt=(span[0] + lead, span[1] - span[0])),
+                                       label["enable"], excerpt=(span[0] + lead, span[1] - span[0]),
+                                       hdr=label["hdr"]),
                         timeout=TOOL_TIMEOUT_S * 10)
         if proc.returncode != 0 or not staged.is_file():
             detail = (proc.stderr or "").strip().splitlines()[-1:] or ["no output"]
@@ -2612,14 +2845,14 @@ def cmd_video_preview(args: argparse.Namespace) -> dict:
                 old.unlink()
     except OSError as exc:
         raise LabelToolError("write_failed", f"Cannot write previews to {out}: {exc}")
-    frames, excerpts = [], []
+    frames, excerpts, view = [], [], sdr_view(plan["path"])
     with tempfile.TemporaryDirectory(prefix="eu-ai-labelling-") as work:
         work = Path(work)
         label = draw_label(args, plan, work)
         for i, at in enumerate(sample_times(duration, args.frames), 1):
             target = out / f"frame-{i:02d}-{at:.2f}s.png"
             try:
-                extract_frame(tools["ffmpeg"], original, at, target)
+                extract_frame(tools["ffmpeg"], original, at, target, view)
                 frames.append({"time": at, "path": str(target), "status": "written"})
             except (LabelToolError, OSError) as exc:
                 target.unlink(missing_ok=True)
@@ -2645,11 +2878,13 @@ def cmd_video_preview(args: argparse.Namespace) -> dict:
         **label["settings"],
         "path": plan["path"]["name"],
         "frames": frames,
+        "frame_rendering": "sdr_tone_mapped" if view else "source",
         "excerpts": excerpts,
         "complete": not failed,
         "failed": len(failed),
         "excerpt_note": EXCERPT_NOTE,
         "sampling_note": SAMPLING_NOTE,
+        **({"hdr_note": HDR_PREVIEW_NOTE} if view else {}),
     }
 
 
