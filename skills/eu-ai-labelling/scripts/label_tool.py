@@ -1960,15 +1960,44 @@ def cmd_video_inspect(args: argparse.Namespace) -> dict:
 # decision; it is never converted silently. Audio and subtitles are copied,
 # never re-encoded, so a path lists the codecs its container carries.
 MP4_AUDIO = ("aac", "mp3", "alac", "ac3", "eac3", "opus", "flac")
+MOV_AUDIO = ("aac", "mp3", "alac", "ac3", "pcm_s16le", "pcm_s24le")
+WEBM_AUDIO = ("opus", "vorbis")
+H264_PIX_FMTS = ("yuv420p", "yuvj420p", "yuv422p", "yuv444p")
+X264 = {"codec": "h264", "codec_title": "H.264", "encoder": "libx264", "quality": "CRF 16",
+        "encode": ["-preset", "medium", "-crf", "16"]}
 LABELLING_PATHS = [
     {
         "name": "mp4-h264-sdr",
         "description": "MP4 with an H.264 video stream in SDR, 8-bit 4:2:0, 4:2:2 or 4:4:4",
-        "container": "mp4", "codec": "h264", "dynamic_range": ("sdr",),
-        "pix_fmts": ("yuv420p", "yuvj420p", "yuv422p", "yuv444p"),
-        "encoder": "libx264", "encode": ["-preset", "medium", "-crf", "16"], "muxer": "mp4",
+        "container": "mp4", **X264, "dynamic_range": ("sdr",), "pix_fmts": H264_PIX_FMTS, "muxer": "mp4",
         "audio": MP4_AUDIO, "subtitles": ("mov_text",),
         "needs": {"decoders": ["h264"], "encoders": ["libx264"], "filters": ["overlay"], "muxers": ["mp4"]},
+    },
+    {
+        "name": "mov-h264-sdr",
+        "description": "MOV (QuickTime) with an H.264 video stream in SDR, 8-bit 4:2:0, 4:2:2 or 4:4:4",
+        "container": "mov", **X264, "dynamic_range": ("sdr",), "pix_fmts": H264_PIX_FMTS, "muxer": "mov",
+        "audio": MOV_AUDIO, "subtitles": ("mov_text",),
+        "needs": {"decoders": ["h264"], "encoders": ["libx264"], "filters": ["overlay"], "muxers": ["mov"]},
+    },
+    {
+        "name": "webm-vp9-sdr",
+        "description": "WebM with a VP9 video stream in SDR, 8-bit 4:2:0",
+        "container": "webm", "codec": "vp9", "codec_title": "VP9", "encoder": "libvpx-vp9", "quality": "CRF 20",
+        "encode": ["-crf", "20", "-b:v", "0", "-deadline", "good", "-cpu-used", "4", "-row-mt", "1"],
+        "dynamic_range": ("sdr",), "pix_fmts": ("yuv420p",), "muxer": "webm",
+        "audio": WEBM_AUDIO, "subtitles": ("webvtt",),
+        "needs": {"decoders": ["vp9"], "encoders": ["libvpx-vp9"], "filters": ["overlay"], "muxers": ["webm"]},
+    },
+    {
+        "name": "webm-vp8-sdr",
+        "description": "WebM with a VP8 video stream in SDR, 8-bit 4:2:0",
+        # VP8's CRF is constrained quality: it needs a bitrate ceiling, set high enough not to bind.
+        "container": "webm", "codec": "vp8", "codec_title": "VP8", "encoder": "libvpx", "quality": "CRF 10",
+        "encode": ["-crf", "10", "-b:v", "50M", "-deadline", "good", "-cpu-used", "4"],
+        "dynamic_range": ("sdr",), "pix_fmts": ("yuv420p",), "muxer": "webm",
+        "audio": WEBM_AUDIO, "subtitles": ("webvtt",),
+        "needs": {"decoders": ["vp8"], "encoders": ["libvpx"], "filters": ["overlay"], "muxers": ["webm"]},
     },
 ]
 # What this version can render beyond the path itself.
@@ -2113,13 +2142,18 @@ def label_overlay(variant: str, colour: str, icon_height: int, pad: int, target:
 
 COLOUR_OPTIONS = (("primaries", "-color_primaries"), ("transfer", "-color_trc"),
                   ("matrix", "-colorspace"), ("range", "-color_range"))
+SETPARAMS_NAMES = {"primaries": "color_primaries", "transfer": "color_trc", "matrix": "colorspace", "range": "range"}
 
 
 def render_command(tools: dict, info: dict, path: dict, overlay: Path, position: tuple, staged: Path,
                    enable: str | None) -> list:
     x, y = position
     timing = f":enable='{enable}'" if enable else ""
-    graph = f"[0:{info['video']['index']}][1:v]overlay=x={x}:y={y}:eof_action=repeat{timing}[labelled]"
+    # A decoder may tag frames the source leaves untagged (VP8 frames come out BT.470BG): keep them untagged.
+    untagged = [f"{name}=unknown" for key, name in SETPARAMS_NAMES.items()
+                if info["video"]["colour"].get(key) in (None, "unknown")]
+    tags = f",setparams={':'.join(untagged)}" if untagged else ""
+    graph = f"[0:{info['video']['index']}][1:v]overlay=x={x}:y={y}:eof_action=repeat{timing}{tags}[labelled]"
     argv = [tools["ffmpeg"], "-nostdin", "-v", "error", "-y", "-i", info["path"], "-i", overlay,
             "-filter_complex", graph, "-map", "[labelled]"]
     for stream in info["audio"] + info["subtitles"]:
@@ -2294,7 +2328,8 @@ def cmd_video_apply(args: argparse.Namespace) -> dict:
             "container": info["container"]["format"], "codec": video["codec"],
             "width": display[0], "height": display[1], "duration": duration,
             "re_encoded": True, "encoder": path["encoder"],
-            "note": (f"The video stream was re-encoded with {path['encoder']} to incorporate the Label, so the copy "
+            "note": (f"The video stream was re-encoded as {path['codec_title']} with {path['encoder']} "
+                     f"({path['quality']}) to incorporate the Label, so the copy "
                      "is not bit-identical to the original. Audio and subtitle tracks were copied without "
                      "re-encoding."),
         },

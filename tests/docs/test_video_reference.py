@@ -10,7 +10,7 @@ import os
 import subprocess
 
 from helpers import SKILL_DIR, SKILL_MD, doc_command, step
-from videos import flat_mp4, needs_ffmpeg, real_tools, without_tools
+from videos import flat_mp4, needs_encoder, needs_ffmpeg, real_tools, without_tools
 
 pytestmark = needs_ffmpeg
 
@@ -132,3 +132,53 @@ def test_the_references_step_waits_for_a_final_copy_and_explains_every_kind_and_
 def test_a_creative_work_video_gets_no_caption():
     third = step(SKILL_MD.read_text(), "Settle where an image's Label goes")
     assert "video" in third and "don't offer it a caption" in third
+
+
+def apply_as_written(tmp_path, video):
+    argv = doc_command("video.md", "video-apply", {"<video>": str(video), "<generated|modified>": "generated",
+                                                   "<tl|tr|bl|br>": "tr"})
+    return run_doc(argv, tmp_path, real_tools(tmp_path / "bin"))
+
+
+def test_the_apply_command_keeps_a_mov_a_mov(tmp_path):
+    video = flat_mp4(tmp_path / "clip.mov", size="640x360", audio=True)
+
+    code, result = apply_as_written(tmp_path, video)
+
+    assert code == 0, result
+    assert result["labelled_copy"] == str(tmp_path / "clip.ai-label.mov")
+    assert result["path"] == "mov-h264-sdr"
+
+
+@needs_encoder("libvpx-vp9")
+def test_the_apply_command_keeps_a_webm_a_webm(tmp_path):
+    video = flat_mp4(tmp_path / "clip.webm", size="640x360", audio=True, codec="libvpx-vp9",
+                     extra=("-deadline", "realtime", "-cpu-used", "8"))
+
+    code, result = apply_as_written(tmp_path, video)
+
+    assert code == 0, result
+    assert result["labelled_copy"] == str(tmp_path / "clip.ai-label.webm")
+    assert result["path"] == "webm-vp9-sdr"
+
+
+def test_the_reference_does_not_imply_every_codec_in_mov_or_webm():
+    from helpers import section
+
+    listed = section(VIDEO_MD.read_text(), "What can be labelled")
+    assert "Only these combinations are validated" in listed
+    assert "ProRes" in listed and "AV1" in listed
+    assert "never converted to MP4" in listed
+    assert "from the file itself, not its name" in listed
+
+
+def test_the_reference_says_what_to_do_about_a_missing_capability():
+    assert "`capability_missing`" in step(VIDEO_MD.read_text(), "When it can't be labelled as it is")
+
+
+def test_the_readme_names_the_validated_combinations():
+    from helpers import REPO_ROOT, section
+
+    videos = section((REPO_ROOT / "README.md").read_text(), "Videos")
+    assert "MP4 or MOV with H.264" in videos and "WebM with VP9 or VP8" in videos
+    assert "never converted to MP4" in videos

@@ -63,7 +63,7 @@ PNG, JPEG and WebP are supported; the Labelled Copy keeps the original's colour 
 
 `label clip.mp4 as fully AI-generated` writes `clip.ai-label.mp4` next to the original, with the EU Icon on an opaque backing plate in a fixed corner (top-right unless you ask for another) for the whole video. The original file is left untouched. The copy keeps the container, codec, dimensions, frame timing and duration of the original, and copies its audio without re-encoding; the video stream itself is re-encoded to incorporate the Label, so the copy is not bit-identical. Before the copy replaces a previous one, the tool decodes it and checks what it kept.
 
-This version labels MP4 files with H.264 video in SDR, up to 60 seconds, with at most one audio track. Any other video (another codec, HDR, more tracks, rotation, a variable frame rate) stops before anything is written, and the agent asks you how to proceed: nothing is converted or dropped silently.
+This version labels SDR videos up to 60 seconds with at most one audio track, in these combinations: MP4 or MOV with H.264 video, and WebM with VP9 or VP8 video. The copy stays in the original's container and codec: a MOV stays a MOV and a WebM stays a WebM, never converted to MP4. The container is read from the file, not its extension. Any other video (another codec inside MOV or WebM such as ProRes or AV1, another container, HDR, more tracks, rotation, a variable frame rate), or a combination your FFmpeg build lacks the encoder for, stops before anything is written, and the agent asks you how to proceed: nothing is converted or dropped silently.
 
 ### Text
 
