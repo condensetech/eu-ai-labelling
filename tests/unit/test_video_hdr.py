@@ -15,7 +15,7 @@ from PIL import Image, ImageStat
 
 from helpers import sha256
 from videos import (
-    FFMPEG, FFPROBE, fake_tool, ffmpeg, frame_side_data, hdr10_video, hdr10plus_info, hlg_video, needs_encoder,
+    FFMPEG, FFPROBE, fake_tool, ffmpeg, frame_side_data, hdr10_video, hdr10plus_video, hlg_video, needs_encoder,
     needs_ffmpeg, planes_10bit, real_tool, real_tools, rotated, streams, tool_env, tracked_mp4, video_stream,
 )
 
@@ -207,7 +207,7 @@ def test_preview_excerpts_are_hdr10_like_the_labelled_copy(tmp_path, label_tool)
 
 
 def test_hdr10_plus_stops_rather_than_losing_its_dynamic_metadata(tmp_path, label_tool):
-    video = hdr10_video(tmp_path / "clip.mp4", hdr10plus=hdr10plus_info(tmp_path / "hdr10plus.json"))
+    video = hdr10plus_video(tmp_path / "clip.mp4")
     assert "HDR Dynamic Metadata SMPTE2094-40 (HDR10+)" in frame_side_data(video), "a real HDR10+ fixture"
 
     issues = unsupported(label_tool, tmp_path, video)

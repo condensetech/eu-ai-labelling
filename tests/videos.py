@@ -329,6 +329,14 @@ def skip_without_hdr10plus(path: Path) -> None:
                     "so no real HDR10+ fixture can be made")
 
 
+def hdr10plus_video(path: Path, *, hlg: bool = False) -> Path:
+    """A real HDR10+ fixture (PQ, or HLG with `hlg`), bundled in `fixtures/video` because some libx265 builds
+    (Ubuntu's) can't encode HDR10+. See its README to regenerate it."""
+    name = "hlg-hdr10plus.mp4" if hlg else "hdr10plus.mp4"
+    shutil.copyfile(Path(__file__).parent / "fixtures" / "video" / name, path)
+    return path
+
+
 def hdr10plus_info(path: Path, frames: int = 25) -> Path:
     """An HDR10+ (SMPTE ST 2094-40) metadata file for x265's `dhdr10-info`, one scene of `frames` frames."""
     scene = {

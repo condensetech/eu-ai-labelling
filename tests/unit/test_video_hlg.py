@@ -13,7 +13,7 @@ from PIL import Image, ImageStat
 from helpers import sha256
 from test_video_hdr import altered_ffmpeg, apply, changed_box, median, unsupported
 from videos import (
-    FFMPEG, MASTER_DISPLAY, fake_tool, ffmpeg, frame_side_data, hdr10plus_info, hlg_video, needs_encoder,
+    FFMPEG, MASTER_DISPLAY, fake_tool, ffmpeg, frame_side_data, hdr10plus_video, hlg_video, needs_encoder,
     needs_ffmpeg, planes_10bit, real_tool, real_tools, rotated, streams, tool_env, tracked_mp4, video_stream,
 )
 
@@ -194,7 +194,7 @@ def test_hlg_with_other_colour_tags_is_not_converted(tmp_path, label_tool):
 
 
 def test_hlg_with_hdr10_plus_metadata_stops_rather_than_losing_it(tmp_path, label_tool):
-    video = hlg_video(tmp_path / "clip.mp4", hdr10plus=hdr10plus_info(tmp_path / "hdr10plus.json"))
+    video = hdr10plus_video(tmp_path / "clip.mp4", hlg=True)
     assert "HDR Dynamic Metadata SMPTE2094-40 (HDR10+)" in frame_side_data(video), "real dynamic metadata"
 
     issues = unsupported(label_tool, tmp_path, video)
