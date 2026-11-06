@@ -1887,10 +1887,18 @@ def is_mirrored(stream: dict) -> bool:
     return False
 
 
+DOLBY_VISION_TAGS = ("dvh1", "dvhe", "dva1", "dvav", "dav1")
+
+
 def dynamic_range(stream: dict, frame_side_data: list) -> str:
     """sdr, hdr10, hlg, or an HDR profile this tool has not validated: hdr10plus, dolby_vision, other_hdr."""
-    kinds = [d.get("side_data_type", "") for d in (stream.get("side_data_list") or [])] + frame_side_data
-    if any("DOVI" in k or "Dolby Vision" in k for k in kinds):
+    side = [d for d in (stream.get("side_data_list") or []) if isinstance(d, dict)]
+    kinds = [d.get("side_data_type", "") for d in side] + frame_side_data
+    # Dolby Vision shows as the stream's configuration record (MP4 dvcC/dvvC: "DOVI configuration record",
+    # with dv_* fields), the frames' RPU ("Dolby Vision RPU Data", "Dolby Vision Metadata"), or a sample
+    # entry only Dolby Vision uses: any one of them is enough, whichever this ffprobe reports.
+    if (any("DOVI" in k or "Dolby Vision" in k for k in kinds) or any("dv_profile" in d for d in side)
+            or stream.get("codec_tag_string") in DOLBY_VISION_TAGS):
         return "dolby_vision"
     transfer = stream.get("color_transfer")
     if any("SMPTE2094-40" in k or "HDR10+" in k for k in kinds):
@@ -1951,10 +1959,22 @@ def disposition_of(stream: dict) -> dict:
     return {k: bool(v) for k, v in (stream.get("disposition") or {}).items()}
 
 
+GENERIC_HANDLER = re.compile(r"handler|^core media ", re.IGNORECASE)  # "SoundHandler", "Core Media Audio", ...
+
+
+def track_title(tags: dict) -> str | None:
+    """A track's title wherever this ffmpeg keeps it in MP4 and MOV: `title`; `name`, the udta box FFmpeg 9
+    writes and reads back; or the handler name (hdlr), the only place FFmpeg 8 and earlier write one, unless
+    it is a muxer's generic name for the track's kind."""
+    handler = tags.get("handler_name")
+    return (tags.get("title") or tags.get("name")
+            or (handler if handler and not GENERIC_HANDLER.search(handler) else None))
+
+
 def stream_summary(stream: dict) -> dict:
     tags = stream.get("tags") or {}
     summary = {"index": stream["index"], "codec": stream.get("codec_name"), "codec_tag": stream.get("codec_tag_string"),
-               "language": tags.get("language"), "title": tags.get("title") or tags.get("name"),  # MP4: `name`
+               "language": tags.get("language"), "title": track_title(tags),
                "disposition": disposition_of(stream), "start_time": number(stream.get("start_time"))}
     if stream.get("codec_type") == "audio":
         summary.update({"channels": stream.get("channels"), "channel_layout": stream.get("channel_layout"),
@@ -2482,8 +2502,10 @@ def render_command(tools: dict, info: dict, path: dict, overlay: Path, position:
     for out, stream in enumerate(info["audio"] + info["subtitles"], start=1):  # each track by name, never by default
         argv += ["-map", f"0:{stream['index']}", f"-map_metadata:s:{out}", f"0:s:{stream['index']}",
                  f"-disposition:{out}", "+".join(k for k, v in stream["disposition"].items() if v) or "0"]
-        if stream["title"]:  # MP4 reads a title back as `name`, which its muxer doesn't write again
+        if stream["title"]:  # set again: a muxer doesn't write the `name` it read back (track_title)
             argv += [f"-metadata:s:{out}", f"title={stream['title']}"]
+            if path["muxer"] in ("mp4", "mov"):  # and as the handler name, where FFmpeg 8 keeps a title
+                argv += [f"-metadata:s:{out}", f"handler_name={stream['title']}"]
     argv += ["-c:v", path["encoder"], *path["encode"], "-pix_fmt", info["video"]["pix_fmt"]]
     if info["video"].get("codec_tag") in path.get("codec_tags", ()):  # hvc1 or hev1, as the source has it
         argv += ["-tag:v", info["video"]["codec_tag"]]
@@ -2558,6 +2580,11 @@ TIME_TOLERANCE_S = 0.002
 # HDR10, in 10-bit code values: the mean change and level shift outside the Label that re-encoding may cause,
 # and how far the backing plate may sit from its PQ level (about 5% in luminance at reference white).
 HDR_MEAN_CHANGE, HDR_BIAS, LEVEL_TOLERANCE = 3.0, 1.0, 6
+# The Label's brightest level is the one this share of its samples reaches, not its single brightest sample:
+# libx265 rings next to the Icon's edges, and a handful of samples (measured: under 0.2% of a Label)
+# overshoot white by an amount that varies between x265 builds (up to 13 code values seen). The Label's
+# white is a fifth to a half of its samples, so a Label left at peak or dimmed still moves this level.
+LABEL_BRIGHTEST_SHARE = 0.01
 
 
 def check(name: str, passed: bool, detail: str) -> dict:
@@ -2652,12 +2679,14 @@ def hdr_checks(tools: dict, source: dict, out: dict, staged: Path, box: tuple, a
     band = sorted(b[row * width + left + hdr["pad"] // 2]
                   for row in range(top + (bottom - top) // 3, top + 2 * (bottom - top) // 3))
     plate = band[len(band) // 2] if band else None
-    peak = max(label) if label else None
+    label.sort()
+    peak = label[int(len(label) * (1 - LABEL_BRIGHTEST_SHARE))] if label else None
     checks.append(check("label_level", plate is not None and abs(plate - hdr["plate_code"]) <= LEVEL_TOLERANCE
                         and peak is not None  # the plate or the Icon is white: neither dim nor at peak
                         and abs(peak - hdr["white_code"]) <= 2 * LEVEL_TOLERANCE,
-                        f"backing plate at code value {plate} (expected {hdr['plate_code']}), brightest Label sample "
-                        f"{peak} (reference white {hdr['white_code']})"))
+                        f"backing plate at code value {plate} (expected {hdr['plate_code']}), brightest "
+                        f"{LABEL_BRIGHTEST_SHARE:.0%} of the Label at {peak} or above, its brightest sample "
+                        f"{label[-1] if label else None} (reference white {hdr['white_code']})"))
     return checks
 
 

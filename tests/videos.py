@@ -152,9 +152,20 @@ def tracked_mp4(path: Path, audio: list[dict] = (), subtitles: list[dict] = (), 
             for key in ("language", "title"):
                 if track.get(key):
                     options += [f"-metadata:s:{kind}:{n}", f"{key}={track[key]}"]
+            if track.get("title"):  # FFmpeg 8 and earlier write a track title only as the handler name
+                options += [f"-metadata:s:{kind}:{n}", f"handler_name={track['title']}"]
             options += [f"-disposition:{kind}:{n}", track.get("disposition", "0")]
     ffmpeg(*args, *maps, *options, "-c:a", "aac", "-c:s", "mov_text", *extra, path)
     return path
+
+
+def track_title(stream: dict) -> str | None:
+    """A track's title as players find it in MP4 and MOV: the `title` tag, the `name` box FFmpeg 9 writes,
+    or the handler name FFmpeg 8 writes, unless that is the muxer's generic one ("SoundHandler")."""
+    tags = stream.get("tags") or {}
+    handler = tags.get("handler_name") or ""
+    generic = "handler" in handler.lower() or handler.lower().startswith("core media ")
+    return tags.get("title") or tags.get("name") or (handler if handler and not generic else None)
 
 
 def stamp(seconds: float) -> str:
@@ -302,7 +313,20 @@ def hdr10_video(path: Path, seconds: float = 1, size: str = "640x360", source: s
         args += ["-f", "lavfi", "-i", f"sine=frequency=440:sample_rate=48000:duration={seconds}", "-c:a", "aac"]
     ffmpeg(*args, "-vf", "format=yuv420p10le", "-c:v", "libx265", "-preset", "ultrafast",
            "-x265-params", ":".join(params), *HDR10_TAGS, "-color_primaries", primaries, *extra, path)
+    if hdr10plus:
+        skip_without_hdr10plus(path)
     return path
+
+
+HDR10_PLUS_SIDE_DATA = "HDR Dynamic Metadata SMPTE2094-40 (HDR10+)"
+
+
+def skip_without_hdr10plus(path: Path) -> None:
+    """Skip the test when the encoded fixture at `path` holds no HDR10+ metadata: a libx265 built without
+    ENABLE_HDR10_PLUS (Ubuntu's, for one) ignores `dhdr10-info` without an error."""
+    if HDR10_PLUS_SIDE_DATA not in frame_side_data(path):
+        pytest.skip("this ffmpeg's libx265 writes no HDR10+ metadata (built without HDR10+ support), "
+                    "so no real HDR10+ fixture can be made")
 
 
 def hdr10plus_info(path: Path, frames: int = 25) -> Path:
@@ -378,4 +402,6 @@ def hlg_video(path: Path, seconds: float = 1, size: str = "640x360", source: str
         params.append(f"dhdr10-info={hdr10plus}")
     ffmpeg("-f", "lavfi", "-i", content, "-vf", "format=yuv420p10le", "-c:v", "libx265", "-preset", "ultrafast",
            "-x265-params", ":".join(params), *HLG_TAGS, "-color_primaries", primaries, *extra, path)
+    if hdr10plus:
+        skip_without_hdr10plus(path)
     return path

@@ -15,7 +15,8 @@ import pytest
 from helpers import sha256
 from videos import (
     FFMPEG, FFPROBE, changed, fake_tool, ffmpeg, flat_mp4, frame_images, frame_times, needs_encoder, needs_ffmpeg,
-    probe, real_tool, real_tools, rotated, streams, tool_env, tracked_mp4, variable_rate_mp4, video_stream,
+    probe, real_tool, real_tools, rotated, streams, tool_env, track_title, tracked_mp4, variable_rate_mp4,
+    video_stream,
 )
 
 pytestmark = needs_ffmpeg
@@ -39,8 +40,7 @@ def stream_md5(path: Path, selector: str) -> str:
 
 def described(stream: dict) -> dict:
     tags = stream.get("tags") or {}
-    return {"codec": stream["codec_name"], "language": tags.get("language"),
-            "title": tags.get("title") or tags.get("name"),
+    return {"codec": stream["codec_name"], "language": tags.get("language"), "title": track_title(stream),
             "disposition": {k for k, v in stream["disposition"].items() if v}}
 
 
@@ -68,6 +68,19 @@ def test_every_audio_track_is_copied_with_its_language_title_disposition_and_syn
     for n in range(2):
         assert stream_md5(copy, f"0:a:{n}") == stream_md5(video, f"0:a:{n}")
         assert offset(copy, labelled[n]) == pytest.approx(offset(video, source[n]), abs=0.001)
+
+
+@CONTAINERS
+def test_a_title_kept_only_as_the_handler_name_is_copied(tmp_path, label_tool, suffix):
+    # As FFmpeg 8 and earlier write a track title: no `title` or `name`, only the hdlr box.
+    video = tracked_mp4(tmp_path / f"clip{suffix}", audio=[{"language": "ita"}], size=SIZE,
+                        extra=("-metadata:s:a:0", "handler_name=Commento"))
+    assert track_title(streams(video, "audio")[0]) == "Commento"
+
+    result = apply(label_tool, tmp_path, video)
+
+    assert result.returncode == 0, result.json
+    assert track_title(streams(Path(result.json["labelled_copy"]), "audio")[0]) == "Commento"
 
 
 SUBTITLES = [{"language": "eng", "disposition": "0"},
@@ -244,12 +257,14 @@ os.execv({FFMPEG!r}, [{FFMPEG!r}, *args])
 @pytest.mark.parametrize("make, drop, add, failed", [
     (lambda tmp: tracked_mp4(tmp / "clip.mp4", audio=AUDIO, size=SIZE), (), ("-metadata:s:a:1", "language=fra"),
      "audio_tracks"),
+    (lambda tmp: tracked_mp4(tmp / "clip.mp4", audio=AUDIO, size=SIZE), (),
+     ("-metadata:s:a:1", "title=", "-metadata:s:a:1", "handler_name="), "audio_tracks"),
     (lambda tmp: tracked_mp4(tmp / "clip.mp4", audio=AUDIO, subtitles=SUBTITLES, size=SIZE), (),
      ("-disposition:s:1", "default"), "subtitle_tracks"),
     (lambda tmp: rotated(flat_mp4(tmp / "stored.mp4", seconds=1, size=SIZE), tmp / "clip.mp4", 90),
      ("-noautorotate",), (), "orientation"),
     (lambda tmp: variable_rate_mp4(tmp / "clip.mp4", offset=0.5), ("-copyts",), (), "start_time"),
-], ids=["audio language", "subtitle forced flag", "rotation", "start offset"])
+], ids=["audio language", "audio title", "subtitle forced flag", "rotation", "start offset"])
 def test_a_copy_that_lost_a_characteristic_is_discarded(tmp_path, label_tool, make, drop, add, failed):
     video = make(tmp_path)
     assert apply(label_tool, tmp_path, video).returncode == 0

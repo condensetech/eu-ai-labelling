@@ -8,7 +8,6 @@ independently of what label_tool reports about itself.
 
 from __future__ import annotations
 
-import shutil
 import sys
 
 import pytest
@@ -218,16 +217,50 @@ def test_hdr10_plus_stops_rather_than_losing_its_dynamic_metadata(tmp_path, labe
     assert not (tmp_path / "clip.ai-label.mp4").exists()
 
 
-def test_dolby_vision_is_recognised_and_stops(tmp_path, label_tool):
-    # Simulated: no encoder here writes Dolby Vision, so ffprobe reports the HDR10+ fixture's dynamic
-    # metadata as a Dolby Vision RPU.
-    video = hdr10_video(tmp_path / "clip.mp4", hdr10plus=hdr10plus_info(tmp_path / "hdr10plus.json"))
-    bin_dir = tmp_path / "bin-dovi"
-    real_tool(bin_dir, "ffmpeg")
-    fake_tool(bin_dir, "ffprobe",
-              f'"{FFPROBE}" "$@" | "{shutil.which("sed")}" "s/HDR Dynamic Metadata SMPTE2094-40 (HDR10+)/Dolby Vision RPU Data/"')
+# What ffprobe reports for a Dolby Vision file, by where it reports it: the MP4's configuration box (dvcC or
+# dvvC) as stream side data, the RPU as the first frame's side data, a DV-only sample entry as the codec tag.
+DOLBY_VISION = {
+    "stream": "for s in data.get('streams', []):\n"
+              "    if s.get('codec_type') == 'video':\n"
+              "        s.setdefault('side_data_list', []).append({'side_data_type': 'DOVI configuration record',\n"
+              "            'dv_version_major': 1, 'dv_version_minor': 0, 'dv_profile': 8, 'dv_level': 4,\n"
+              "            'rpu_present_flag': 1, 'el_present_flag': 0, 'bl_present_flag': 1,\n"
+              "            'dv_bl_signal_compatibility_id': 1})\n",
+    "frame": "for f in data.get('frames', []):\n"
+             "    f.setdefault('side_data_list', []).extend([{'side_data_type': 'Dolby Vision RPU Data'},\n"
+             "                                               {'side_data_type': 'Dolby Vision Metadata'}])\n",
+    "codec_tag": "for s in data.get('streams', []):\n"
+                 "    if s.get('codec_type') == 'video':\n"
+                 "        s['codec_tag_string'] = 'dvh1'\n",
+}
 
-    issues = unsupported(label_tool, tmp_path, video, env=tool_env(bin_dir))
+
+def dolby_vision_ffprobe(bin_dir, where: str) -> dict:
+    """PATH with the real ffmpeg and a real ffprobe whose JSON reports Dolby Vision `where` (DOLBY_VISION)."""
+    real_tool(bin_dir, "ffmpeg")
+    script = bin_dir / "dovi.py"
+    script.write_text(
+        "import json, subprocess, sys\n"
+        f"proc = subprocess.run([{FFPROBE!r}, *sys.argv[1:]], capture_output=True, text=True)\n"
+        "sys.stderr.write(proc.stderr)\n"
+        "try:\n"
+        "    data = json.loads(proc.stdout)\n"
+        "except json.JSONDecodeError:\n"
+        "    sys.stdout.write(proc.stdout)\n"
+        "    sys.exit(proc.returncode)\n"
+        + DOLBY_VISION[where] +
+        "json.dump(data, sys.stdout)\n"
+        "sys.exit(proc.returncode)\n")
+    fake_tool(bin_dir, "ffprobe", f'exec "{sys.executable}" "{script}" "$@"')
+    return tool_env(bin_dir)
+
+
+@pytest.mark.parametrize("where", sorted(DOLBY_VISION))
+def test_dolby_vision_is_recognised_and_stops(tmp_path, label_tool, where):
+    # Simulated: no encoder here writes Dolby Vision, so ffprobe reports an HDR10 fixture as Dolby Vision.
+    video = hdr10_video(tmp_path / "clip.mp4")
+
+    issues = unsupported(label_tool, tmp_path, video, env=dolby_vision_ffprobe(tmp_path / "bin-dovi", where))
 
     assert [i["code"] for i in issues] == ["hdr_not_validated"]
     assert "Dolby Vision" in issues[0]["message"]
