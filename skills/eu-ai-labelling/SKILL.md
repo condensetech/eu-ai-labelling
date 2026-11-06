@@ -47,7 +47,7 @@ When the user only asks whether a Label is required, answer as **Whether a Label
    A Labelled Copy of an image inside the project then goes through `references/update-references.md`, as the image and batch references say; a video's goes through step 8 of `references/video.md`, without any alt-text change.
 
    Done when the reference file's own completion criterion is met.
-5. **Report** what the reference files you followed ask you to report: for an image the Labelled Copy's path and the parameters used, for a video what `references/video.md` asks, for a batch the summary in `references/batch.md`, and after a Labelled Copy inside the project the reference lists from `references/update-references.md`. Close with this note: "This is not legal advice. The plugin is not affiliated with the European Commission."
+5. **Report** what the reference files you followed ask you to report: for an image the Labelled Copy's path and the parameters used, for a video what `references/video.md` asks, for a batch the summary in `references/batch.md`, and after a Labelled Copy inside the project the reference lists from `references/update-references.md`. Close with this note: "This is not legal advice."
 
 ## Whether a Label is required
 

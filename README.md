@@ -2,8 +2,6 @@
 
 A plugin for Claude Code and OpenAI Codex that applies the official EU Icons as visible labels on AI-generated or AI-modified content, following Article 50(4) of the EU AI Act and Section 2 of the Code of Practice on transparency of AI-generated content.
 
-> **Not affiliated with the EU.** This project is not affiliated with, endorsed by or connected to the European Commission or any EU institution. The EU Icons are the Commission's; this plugin only applies them.
->
 > **Not legal advice.** The plugin helps you apply labels; it does not tell you what the law requires of you and does not certify compliance. Check the official guidance, or ask a lawyer, for your own situation.
 >
 > **No adherence signal.** Using the EU Icons without signing the Code of Practice doesn't signal adherence to the Code of Practice.

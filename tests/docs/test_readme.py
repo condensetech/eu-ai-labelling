@@ -80,11 +80,9 @@ def test_readme_links_the_official_sources():
         assert url in sources
 
 
-def test_readme_states_non_affiliation_not_legal_advice_and_no_adherence_signal():
+def test_readme_states_not_legal_advice_and_no_adherence_signal():
     text = re.sub(r"\s+", " ", readme())
 
-    assert "not affiliated with" in text
-    assert "European Commission" in text
     assert "Not legal advice" in text
     assert "doesn't signal adherence to the Code of Practice" in text
 

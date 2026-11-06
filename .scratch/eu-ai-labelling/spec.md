@@ -37,7 +37,7 @@ When invoked, the agent:
 5. As a user, I want a single entry point for images, text and sites, so that I don't need to know which sub-tool to pick.
 6. As a user, I want the agent to pick up the skill automatically when I say "label this image as AI-generated", so that I don't have to remember the command.
 7. As a user, I want the plugin to need no system packages beyond `uv` (or Python with Pillow), so that installation can't fail on missing native libraries.
-8. As a user, I want the README to state clearly that the plugin isn't affiliated with the EU and isn't legal advice, so that I don't over-rely on it.
+8. As a user, I want the README to state clearly that the plugin isn't legal advice, so that I don't over-rely on it.
 
 ### Disclosure Assessment
 
@@ -140,7 +140,7 @@ When invoked, the agent:
   Without the file there is no automatic behaviour. The skill creates the file on request.
 - **Hooks.** A post-write/edit hook for both Claude Code and Codex. Each is a thin wrapper that calls `label_tool check-hook`. The hook reminds the agent; it never blocks. A file counts as already labelled if it has the `.ai-label.` suffix or contains the marker comment. Files listed as Exemptions are skipped. All state lives in the files and the config, with no ledger.
 - **References and alt text.** After producing a Labelled Copy in a project, the agent updates references it can find to point to the copy, updates alt text to mention AI generation, and lists references it couldn't update.
-- **Distribution.** Public GitHub repository `condensetech/eu-ai-labelling`, MIT licence. The README carries the non-affiliation and not-legal-advice statements, links the official EU icons page, Code of Practice and Guidelines, and notes that using the icons doesn't signal adherence to the Code.
+- **Distribution.** Public GitHub repository `condensetech/eu-ai-labelling`, MIT licence. The README carries the not-legal-advice statement, links the official EU icons page, Code of Practice and Guidelines, and notes that using the icons doesn't signal adherence to the Code.
 
 ## Testing Decisions
 

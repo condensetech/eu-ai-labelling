@@ -4,7 +4,7 @@
 - installation for both Claude Code and Codex;
 - usage examples for images, text, sites and project setup;
 - links to the official EU icons page, the Code of Practice and the Guidelines;
-- the non-affiliation and not-legal-advice statements;
+- the not-legal-advice statement;
 - the note that using the icons doesn't signal adherence to the Code;
 - the placement defaults, documented as the plugin's own choices.
 
@@ -28,7 +28,7 @@ A manual install check in both tools confirms the plugin works end to end.
 
 ## Comments
 
-**Built:** The README covers installation for Claude Code and Codex, usage for images, text, creative works, batches, sites and projects, the official sources, the non-affiliation, not-legal-advice and no-adherence statements, and a Placement defaults section. `tests/e2e/test_release.py` checks the marketplace install, the `/eu-ai-labelling` resolution, the installed hook in an opted-in project, the Codex manifest and skill name statically, the README against the shipped files, and the placement defaults against `label_tool`.
+**Built:** The README covers installation for Claude Code and Codex, usage for images, text, creative works, batches, sites and projects, the official sources, the not-legal-advice and no-adherence statements, and a Placement defaults section. `tests/e2e/test_release.py` checks the marketplace install, the `/eu-ai-labelling` resolution, the installed hook in an opted-in project, the Codex manifest and skill name statically, the README against the shipped files, and the placement defaults against `label_tool`.
 
 **Tested:** `uv run pytest` (without the headless LLM tests): 302 passed, 33 skipped. The skips are the headless tests and evals, which need `EU_AI_LABELLING_E2E_DIR` and a live `claude` CLI.
 

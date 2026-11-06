@@ -814,7 +814,7 @@ that depends on facts and a legal judgement that are yours to make. These are th
 
 Would you like me to add a Label to it anyway?
 
-This is not legal advice. The plugin is not affiliated with the European Commission.
+This is not legal advice.
 """
 
 WEAKENED_REQUIRED_REPLIES = {
