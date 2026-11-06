@@ -7,7 +7,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v6
       - run: sudo apt-get update && sudo apt-get install -y ffmpeg
-      - name: Inspect HLG failure
+      - name: Compare HLG encoding quality
         run: |
           uv run python - <<'PY'
           import sys, tempfile, json
@@ -15,11 +15,16 @@ jobs:
           sys.path.insert(0, "tests")
           from videos import hlg_video, real_tools
           from conftest import run_label_tool
-          with tempfile.TemporaryDirectory() as temp:
-              root = Path(temp)
-              source = hlg_video(root / "clip.mp4")
-              result = run_label_tool("video-apply", source, "--variant", "generated", env=real_tools(root / "bin"))
-              print(json.dumps(result.json, indent=2))
-              print(result.stderr)
-              sys.exit(result.returncode)
+          script = Path("skills/eu-ai-labelling/scripts/label_tool.py")
+          original = script.read_text()
+          prefix, suffix = original.split('"name": "mp4-hevc-hlg"', 1)
+          for crf in (14, 12, 10):
+              script.write_text(prefix + '"name": "mp4-hevc-hlg"' + suffix.replace('"-crf", "14"', f'"-crf", "{crf}"', 1))
+              with tempfile.TemporaryDirectory() as temp:
+                  root = Path(temp)
+                  source = hlg_video(root / "clip.mp4")
+                  result = run_label_tool("video-apply", source, "--variant", "generated", env=real_tools(root / "bin"))
+                  report = result.json.get("error") or result.json.get("validation")
+                  print(json.dumps({"crf": crf, "exit": result.returncode, "report": report}, indent=2))
+          script.write_text(original)
           PY
