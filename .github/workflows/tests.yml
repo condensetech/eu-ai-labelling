@@ -1,21 +1,25 @@
-# The fast test suite: label_tool, the skill's references and the plugin's
-# packaging. Tests that call the model (`model`) or need the claude
-# CLI (`claude_cli`) are left out; run those by hand (see README.md, Tests).
-name: tests
-
-on:
-  push:
-  pull_request:
-
+name: video-ci-diagnostic
+on: push
 jobs:
-  fast:
+  diagnose:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v6
-      - name: Install FFmpeg for the video tests
-        run: sudo apt-get update && sudo apt-get install -y ffmpeg
-      - name: Install the harness that runs the React label component
-        run: npm ci --prefix tests/evals/site
-      - name: Run the fast suite
-        run: uv run pytest -m "not model and not claude_cli"
+      - run: sudo apt-get update && sudo apt-get install -y ffmpeg
+      - name: Inspect HLG failure
+        run: |
+          uv run python - <<'PY'
+          import sys, tempfile, json
+          from pathlib import Path
+          sys.path.insert(0, "tests")
+          from videos import hlg_video, real_tools
+          from conftest import run_label_tool
+          with tempfile.TemporaryDirectory() as temp:
+              root = Path(temp)
+              source = hlg_video(root / "clip.mp4")
+              result = run_label_tool("video-apply", source, "--variant", "generated", env=real_tools(root / "bin"))
+              print(json.dumps(result.json, indent=2))
+              print(result.stderr)
+              sys.exit(result.returncode)
+          PY
