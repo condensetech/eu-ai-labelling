@@ -186,3 +186,30 @@ def test_the_readme_describes_batches_of_videos():
     batches = section((REPO_ROOT / "README.md").read_text(), "Batches")
     assert "video" in batches and "visibility" in batches
     assert "the others" in batches and "retry" in batches
+
+
+def test_a_batchs_existing_labels_are_asked_about_in_its_one_message():
+    """Images are looked at before the one message, so the "label anyway?"
+    question joins it; a video's shows only in its preview frames, so it joins
+    the later placement question instead. The rule itself is in SKILL.md
+    (test_existing_label)."""
+    batch = section(SKILL_MD.read_text(), "A batch of files")
+    existing = batch.split("**Existing Labels.**", 1)[1].split("\n- ", 1)[0]
+    assert "**An Existing Label**" in existing and "step 2 of `references/image.md`" in existing
+    assert "before" in existing and "one message" in existing
+    assert "group" in existing, "files sharing the question are not grouped by name"
+    assert "step 5 of `references/batch.md`" in existing and "`video-preview`" in existing
+    assert "Never ask again" in existing
+    steps = BATCH_MD.read_text()
+    assert "Existing Label" in step(steps, "Look at every image yourself")
+    assert "Existing Label" in step(steps, "Ask about every uncertain placement")
+    assert "Existing Label" in step(section(steps, "Videos in a batch"), "Preview each video")
+
+
+def test_a_file_whose_existing_label_is_kept_is_skipped_in_the_report():
+    report = step(BATCH_MD.read_text(), "Report the batch")
+    skipped = report.split("**Skipped:**", 1)[1].split("\n   - ", 1)[0]
+    assert "Existing Label kept, no EU Icon added" in skipped
+    assert "Existing Label" in report.split("**Labelled:**", 1)[1].split("\n   - ", 1)[0], (
+        "a file labelled anyway never names its Existing Label"
+    )

@@ -1360,6 +1360,49 @@ def test_check_rejects_a_labelled_copy_written_before_the_user_answers_about_an_
         check(scenario, project, digests, ASKS_ABOUT_IMAGE_EXISTING_LABEL_REPLY)
 
 
+# A batch where one image has "AI generated" in its pixels: the batch's one
+# message asks, naming that image, whether to add the EU Icon anyway, and no
+# file of the batch is labelled until the user answers.
+
+BATCH_EXISTING_LABEL_SCENARIO = "existing-label-batch"
+
+ASKS_ABOUT_BATCH_EXISTING_LABEL_REPLY = """\
+All three images were generated from scratch, so each gets the Fully AI-Generated icon.
+One question before I label the batch:
+
+1. stage.png already shows "AI generated" in its bottom-left corner. Should I add the EU Icon to stage.png anyway, or leave it as it is?
+"""
+
+
+def test_check_accepts_a_batch_asking_about_the_image_with_an_existing_label(tmp_path):
+    scenario = load_scenario(BATCH_EXISTING_LABEL_SCENARIO)
+    project, digests = checked_project(tmp_path, scenario)
+
+    check(scenario, project, digests, ASKS_ABOUT_BATCH_EXISTING_LABEL_REPLY)
+
+
+@pytest.mark.parametrize("old, new", [
+    ("Should I add the EU Icon to stage.png anyway", "Should I add the EU Icon to it anyway"),
+    ("Should I add the EU Icon to stage.png anyway, or leave it as it is?", "I'll label the others first."),
+], ids=["question doesn't name the file", "no question"])
+def test_check_rejects_a_batch_reply_not_asking_about_the_existing_label_by_name(tmp_path, old, new):
+    scenario = load_scenario(BATCH_EXISTING_LABEL_SCENARIO)
+    project, digests = checked_project(tmp_path, scenario)
+    assert old in ASKS_ABOUT_BATCH_EXISTING_LABEL_REPLY
+
+    with pytest.raises(AssertionError):
+        check(scenario, project, digests, ASKS_ABOUT_BATCH_EXISTING_LABEL_REPLY.replace(old, new))
+
+
+def test_check_rejects_labelling_the_rest_of_the_batch_before_the_user_answers(tmp_path, label_tool):
+    scenario = load_scenario(BATCH_EXISTING_LABEL_SCENARIO)
+    project, digests = checked_project(tmp_path, scenario)
+    assert label_tool("apply", project / "event" / "team-1.png", "--variant", "generated").returncode == 0
+
+    with pytest.raises(AssertionError):
+        check(scenario, project, digests, ASKS_ABOUT_BATCH_EXISTING_LABEL_REPLY)
+
+
 # --- Creative Work: where the Label goes -----------------------------------------
 #
 # A satirical image, with or without a named variant: the skill asks whether to

@@ -1,0 +1,39 @@
+{
+  "description": "A folder of three generated images, one with \"AI generated\" already in its pixels: the batch's one message asks, by name, whether to add the EU Icon anyway to that image, and nothing is labelled yet.",
+  "files": {
+    "event/team-1.png": {
+      "image": [
+        1200,
+        800
+      ]
+    },
+    "event/team-2.png": {
+      "image": [
+        1200,
+        800
+      ]
+    },
+    "event/stage.png": {
+      "image": [
+        1200,
+        800
+      ],
+      "pixel_text": "AI generated"
+    }
+  },
+  "prompt": "/eu-ai-labelling label every image in event/. All three were generated from scratch with an image model for the news page of our public website: illustrations of a summer party, not satire or art, so burn the icon into each picture. I don't need a preview.",
+  "expect": {
+    "labelled": false,
+    "existing_label": {
+      "says": "ai generated",
+      "where": "(?:bottom|lower)[- ]left",
+      "asks": true
+    },
+    "batch_questions": {
+      "about": [
+        "stage.png"
+      ],
+      "not_about": []
+    }
+  }
+}
