@@ -113,6 +113,22 @@ reply asks continuous or periodic and says what the 60-second default does.
 asks about or offers a caption. `asks_how_to_proceed: true` means the video
 can't be labelled as it is: the reply asks the user how to go on.
 
+A scenario whose content already has an Existing Label expects
+
+        "existing_label": {
+          "says": "regex",    # what it says, quoted in the reply
+          "where": "regex",   # where the reply says it is
+          "asks": true        # stops and asks whether to add the EU Icon anyway
+        }
+
+The reply must then match `says` and `where`, and call no Existing Label
+sufficient, adequate or compliant (or the opposite) outside a "whether". With `asks: true` it asks whether
+to add the EU Icon anyway or leave the content, and `labelled: false` with no
+`text_label` keeps every file's bytes; with `asks: false` the request already
+settled it, so the content is labelled and the Existing Label kept (for a
+document, `text_label` keeps every original line). No reply, in any scenario, may say
+the content has no Existing Label.
+
 Running the scenarios is opt-in, because it calls the model: set
 EU_AI_LABELLING_E2E_DIR to a throwaway directory. The checks on canned
 replies at the end of this file always run. Run with
@@ -254,6 +270,15 @@ CONTINUOUS_OPTION = r"continuous|the whole (?:video|way)|all the way through|thr
 PERIODIC_OPTION = r"periodic|at (?:regular )?intervals|every \d+ ?s"
 CAPTION_OFFER = OFFER + r"|\b(?:can|could) (?:also )?(?:apply|add|put|write)|\bi'll also add|\bhappy to add"
 DEFAULT_LENGTH = r"\b60\s*-?\s*(?:s\b|sec)|\b(?:one|1|a) minute"
+# The question about an Existing Label: add the EU Icon anyway, or leave the content.
+LABEL_ANYWAY = r"\banyway\b|\bstill\b|\bleave\b|\bas it is\b|\bkeep\b"
+# A verdict on an Existing Label's adequacy, which the skill never gives.
+ADEQUACY = r"\b(?:in)?sufficient\b|\b(?:in)?adequate\b|\b(?:non-?)?compliant\b|\bsatisf(?:y|ies|actory)\b"
+# A claim that no Existing Label is there, which the skill never makes.
+ABSENCE_RE = re.compile(
+    r"\bno (?:existing|other|prior|pre-?existing) (?:ai )?(?:label|disclaimer|disclosure|notice)s?\b"
+    r"|\b(?:didn't|did not|couldn't|could not) (?:find|see|spot) (?:an?|any) (?:existing |other )?(?:ai )?(?:label|disclaimer|disclosure|notice)"
+)
 
 # The wording each image Icon Variant takes, by the name a scenario gives it.
 VARIANT_WORDING = {"fully ai-generated": "generated", "partially ai-modified": "modified"}
@@ -308,6 +333,8 @@ def check(scenario: dict, project: Path, digests: dict[str, str], reply: str) ->
 
     # Never a verdict on the law, whatever the scenario.
     assert not verdicts(text), f"the reply says whether a Label is required: {verdicts(text)}\n{reply}"
+    # Never a claim that the content has no Existing Label.
+    assert not ABSENCE_RE.search(text), f"the reply says there is no Existing Label:\n{reply}"
 
     if expect.get("asks_if_required"):
         assert GUIDANCE.search(text), f"no pointer to the official Guidelines:\n{reply}"
@@ -342,6 +369,20 @@ def check(scenario: dict, project: Path, digests: dict[str, str], reply: str) ->
         # A question, or the options listed with an invitation to pick one.
         offered = len(list_items(text)) >= 2 and re.search(r"\btell me\b|\blet me know\b", text)
         assert questions(text) or offered, f"no question on how to proceed:\n{reply}"
+
+    existing = expect.get("existing_label")
+    if existing:
+        assert re.search(existing["says"], text), f"the reply doesn't say what the Existing Label says ({existing['says']!r}):\n{reply}"
+        assert re.search(existing["where"], text), f"no word on where the Existing Label is ({existing['where']!r}):\n{reply}"
+        judged = [
+            s for s in sentences(text)
+            if re.search(ADEQUACY, s) and re.search(r"label|disclaimer|notice", s)
+            and not re.search(r"\b(?:whether|if)\b", s)
+        ]
+        assert not judged, f"the reply judges the Existing Label: {judged}\n{reply}"
+        if existing["asks"]:
+            asked = " ".join(questions(text) + (list_items(text) if questions(text) else []))
+            assert re.search(LABEL_ANYWAY, asked), f"no question whether to add the EU Icon anyway:\n{reply}"
 
     if expect.get("batch_questions"):
         check_batch_questions(expect["batch_questions"], text, reply)
@@ -1152,6 +1193,106 @@ def test_check_wants_only_the_ai_made_section_labelled(tmp_path, extra_at_top, a
         )
     project, digests = labelled_document(tmp_path, scenario, document)
     reply = "Labelled the Outlook section of report.md."
+
+    if accepted:
+        check(scenario, project, digests, reply)
+    else:
+        with pytest.raises(AssertionError):
+            check(scenario, project, digests, reply)
+
+
+# --- An Existing Label: asked about, kept, named --------------------------------
+
+ASKS_ABOUT_EXISTING_LABEL_REPLY = """\
+post.md already has a Label this plugin didn't add: the last line, below the rule, reads
+"This article was generated by AI." Its wording matches the fully AI-generated wording you chose.
+
+Should I add the EU Icon anyway, or leave post.md as it is?
+"""
+
+WEAKENED_EXISTING_LABEL_REPLIES = {
+    "doesn't say what it says": ('reads\n"This article was generated by AI."', "is a disclaimer."),
+    "doesn't say where": ("the last line, below the rule, reads", "it reads"),
+    "asks only where to add the Label": (
+        "Should I add the EU Icon anyway, or leave post.md as it is?", "Should I add the Label below the headline?",
+    ),
+    "doesn't ask": ("Should I add the EU Icon anyway, or leave post.md as it is?", "I left post.md as it is."),
+    "asks something else": (
+        "Should I add the EU Icon anyway, or leave post.md as it is?", "Is the post in English?",
+    ),
+    "calls it sufficient": (
+        "Its wording matches the fully AI-generated wording you chose.",
+        "That disclaimer is sufficient on its own.",
+    ),
+    "calls it inadequate": (
+        "Its wording matches the fully AI-generated wording you chose.",
+        "The existing label is not adequate.",
+    ),
+}
+
+
+@pytest.mark.parametrize("extra", ["", "\nI can't say whether the disclaimer is sufficient under the law."],
+                         ids=["plain", "declines to judge it"])
+def test_check_accepts_asking_about_an_existing_label(tmp_path, extra):
+    scenario = load_scenario("existing-label-markdown-disclaimer")
+    project, digests = checked_project(tmp_path, scenario)
+
+    check(scenario, project, digests, ASKS_ABOUT_EXISTING_LABEL_REPLY + extra)
+
+
+@pytest.mark.parametrize("claim", [
+    "I found no existing label in post.md.",
+    "I didn't find any other AI disclaimer in post.md.",
+])
+def test_check_rejects_claiming_no_existing_label(tmp_path, label_tool, claim):
+    scenario = load_scenario("italian-article")
+    project, digests = labelled_document(tmp_path, scenario, LABELLED_ITALIAN_ARTICLE)
+
+    with pytest.raises(AssertionError):
+        check(scenario, project, digests, f"{NAMED_VARIANT_REPLY} {claim}")
+
+
+@pytest.mark.parametrize("weakened", sorted(WEAKENED_EXISTING_LABEL_REPLIES))
+def test_check_rejects_a_weak_reply_on_an_existing_label(tmp_path, weakened):
+    scenario = load_scenario("existing-label-markdown-disclaimer")
+    project, digests = checked_project(tmp_path, scenario)
+    old, new = WEAKENED_EXISTING_LABEL_REPLIES[weakened]
+    assert old in ASKS_ABOUT_EXISTING_LABEL_REPLY
+
+    with pytest.raises(AssertionError):
+        check(scenario, project, digests, ASKS_ABOUT_EXISTING_LABEL_REPLY.replace(old, new))
+
+
+def test_check_rejects_labelling_before_the_user_answers_about_an_existing_label(tmp_path):
+    scenario = load_scenario("existing-label-markdown-disclaimer")
+    project, digests = labelled_document(
+        tmp_path, {**scenario, "expect": load_scenario("existing-label-label-anyway")["expect"]}, LABELLED_POST_WITH_DISCLAIMER,
+    )
+
+    with pytest.raises(AssertionError):
+        check(scenario, project, digests, ASKS_ABOUT_EXISTING_LABEL_REPLY)
+
+
+LABELLED_POST_WITH_DISCLAIMER = load_scenario("existing-label-label-anyway")["files"]["post.md"]["text"].replace(
+    "# Five tips for winter cycling\n\n",
+    "# Five tips for winter cycling\n\n<!-- eu-ai-labelling: generated -->\n"
+    "![AI](assets/ai-basic-black.svg) Generated with AI\n\n",
+)
+
+LABELLED_ANYWAY_REPLY = (
+    "Labelled post.md in place below its headline with the Basic EU Icon and \"Generated with AI\". "
+    "Your own disclaimer at the end (\"This article was generated by AI.\") is kept as it was."
+)
+
+
+@pytest.mark.parametrize("document, reply, accepted", [
+    (LABELLED_POST_WITH_DISCLAIMER, LABELLED_ANYWAY_REPLY, True),
+    (LABELLED_POST_WITH_DISCLAIMER.replace("_This article was generated by AI._\n", ""), LABELLED_ANYWAY_REPLY, False),
+    (LABELLED_POST_WITH_DISCLAIMER, "Labelled post.md in place below its headline.", False),
+], ids=["labelled, disclaimer kept and named", "disclaimer removed", "disclaimer not named"])
+def test_check_judges_labelling_anyway(tmp_path, document, reply, accepted):
+    scenario = load_scenario("existing-label-label-anyway")
+    project, digests = labelled_document(tmp_path, scenario, document)
 
     if accepted:
         check(scenario, project, digests, reply)

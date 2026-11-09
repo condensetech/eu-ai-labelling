@@ -10,6 +10,10 @@ Helps people who produce or publish content with coding agents apply visible EU 
 A visible, human-perceivable disclosure attached to a piece of content stating that AI generated or modified it.
 _Avoid_: Mark, tag, watermark, badge
 
+**Existing Label**:
+A Label already present in the content that this plugin didn't apply, such as a disclaimer line, an "AI generated" text in an image, or a site's own AI notice.
+_Avoid_: Badge, disclaimer (alone), pre-existing marking
+
 **Marking**:
 A machine-readable signal (metadata, watermark, fingerprint) embedded in content to identify it as AI-generated. Primarily the provider's duty; distinct from a Label.
 _Avoid_: Label, watermark (as a synonym for the whole concept)
