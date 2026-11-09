@@ -1,0 +1,22 @@
+{
+  "description": "A product shot with \"AI generated\" already written in its pixels: the skill stops before writing a Labelled Copy, says where the Existing Label is and what it says, and asks whether to add the EU Icon anyway.",
+  "files": {
+    "lamp.png": {
+      "image": [
+        1200,
+        800
+      ],
+      "pixel_text": "AI generated"
+    }
+  },
+  "prompt": "/eu-ai-labelling label lamp.png. I generated it from scratch with an image model: a product shot of a desk lamp for our online shop. It's not satire or art, so burn the icon into the picture. I don't need a preview.",
+  "expect": {
+    "variant": "Fully AI-Generated",
+    "labelled": false,
+    "existing_label": {
+      "says": "ai generated",
+      "where": "(?:bottom|lower)[- ]left",
+      "asks": true
+    }
+  }
+}

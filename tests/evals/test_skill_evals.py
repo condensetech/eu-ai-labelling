@@ -6,6 +6,7 @@ project, the prompt to send and the behaviour expected back:
     {
       "description": "...",
       "files": {"speech.png": {"image": [w, h]}, "post.md": {"text": "..."},
+                "lamp.png": {"image": [w, h], "pixel_text": "AI generated"},   # text drawn black, bottom-left
                 "clip.mp4": {"video": {"seconds": s, "size": "WxH"}}},   # encoded by the local ffmpeg
       "prompt": "/eu-ai-labelling ...",
       "expect": {
@@ -147,7 +148,7 @@ from html.parser import HTMLParser
 from pathlib import Path
 
 import pytest
-from PIL import Image, ImageDraw
+from PIL import Image, ImageDraw, ImageFont
 
 from helpers import ICON_MATCH, ICONS_DIR, REPO_ROOT, SKILL_DIR, icon_match, sha256
 from label_checks import label_problems
@@ -171,21 +172,31 @@ def load_scenarios() -> list[tuple[str, dict]]:
 # --- Running a scenario -----------------------------------------------------
 
 
+def write_file(path: Path, spec: dict) -> None:
+    """One scenario file, as its spec says. An image's `pixel_text` is drawn in
+    black in its bottom-left corner, 6% of the shorter side tall."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    if "image" in spec:
+        image = Image.new("RGB", tuple(spec["image"]), (200, 220, 240))
+        if "pixel_text" in spec:
+            size = round(min(image.size) * 0.06)
+            draw = ImageDraw.Draw(image)
+            draw.text((size, image.height - size), spec["pixel_text"], fill=(0, 0, 0),
+                      font=ImageFont.load_default(size=size), anchor="ls")
+        image.save(path)
+    elif "video" in spec:
+        from videos import flat_mp4
+
+        flat_mp4(path, **spec["video"])
+    else:
+        path.write_text(spec["text"])
+
+
 def make_project(files: dict[str, dict]) -> Path:
     project = Path(os.environ["EU_AI_LABELLING_E2E_DIR"]) / f"eval-{uuid.uuid4().hex[:8]}"
     project.mkdir(parents=True)
     for name, spec in files.items():
-        path = project / name
-        path.parent.mkdir(parents=True, exist_ok=True)
-        if "image" in spec:
-            width, height = spec["image"]
-            Image.new("RGB", (width, height), (200, 220, 240)).save(path)
-        elif "video" in spec:
-            from videos import flat_mp4
-
-            flat_mp4(path, **spec["video"])
-        else:
-            path.write_text(spec["text"])
+        write_file(project / name, spec)
     return project
 
 
@@ -829,15 +840,7 @@ def checked_project(tmp_path: Path, scenario: dict) -> tuple[Path, dict[str, str
     project = tmp_path / "project"
     project.mkdir()
     for name, spec in scenario["files"].items():
-        (project / name).parent.mkdir(parents=True, exist_ok=True)
-        if "image" in spec:
-            Image.new("RGB", tuple(spec["image"]), (200, 220, 240)).save(project / name)
-        elif "video" in spec:
-            from videos import flat_mp4
-
-            flat_mp4(project / name, **spec["video"])
-        else:
-            (project / name).write_text(spec["text"])
+        write_file(project / name, spec)
     return project, {name: sha256(project / name) for name in scenario["files"]}
 
 
@@ -1299,6 +1302,61 @@ def test_check_judges_labelling_anyway(tmp_path, document, reply, accepted):
     else:
         with pytest.raises(AssertionError):
             check(scenario, project, digests, reply)
+
+
+# An image with "AI generated" in its pixels: the skill writes no Labelled Copy
+# until the user says whether to add the EU Icon anyway.
+
+IMAGE_EXISTING_LABEL_SCENARIO = "existing-label-image-pixels"
+
+ASKS_ABOUT_IMAGE_EXISTING_LABEL_REPLY = """\
+lamp.png already shows "AI generated" in its bottom-left corner. That wording matches the fully AI-generated wording you chose.
+
+Should I add the EU Icon anyway, or leave the image as it is?
+"""
+
+
+def test_the_image_fixture_has_its_text_in_the_pixels(tmp_path):
+    """Drawn, not a flat colour: the Existing Label is there to be read."""
+    project, _ = checked_project(tmp_path, load_scenario(IMAGE_EXISTING_LABEL_SCENARIO))
+    with Image.open(project / "lamp.png") as image:
+        grey = image.convert("L")
+    width, height = grey.size
+    dark = grey.point(lambda v: 255 if v < 100 else 0)
+    # Text 48 px tall (6% of 800) along the bottom-left, nothing anywhere else.
+    left, top, right, bottom = dark.getbbox()
+    assert left < width // 10 and bottom > height * 0.9, "the text is not in the bottom-left corner"
+    assert 30 <= bottom - top <= 70 and right - left > 150, f"not a line of text: {(left, top, right, bottom)}"
+
+
+def test_check_accepts_asking_about_an_existing_label_in_an_image(tmp_path):
+    scenario = load_scenario(IMAGE_EXISTING_LABEL_SCENARIO)
+    project, digests = checked_project(tmp_path, scenario)
+
+    check(scenario, project, digests, ASKS_ABOUT_IMAGE_EXISTING_LABEL_REPLY)
+
+
+@pytest.mark.parametrize("old, new", [
+    ("in its bottom-left corner", "in its top-left corner"),
+    ('"AI generated"', "a disclaimer"),
+    ("Should I add the EU Icon anyway, or leave the image as it is?", "I'll wait."),
+], ids=["wrong corner", "doesn't say what it says", "no question"])
+def test_check_rejects_a_weak_reply_on_an_existing_label_in_an_image(tmp_path, old, new):
+    scenario = load_scenario(IMAGE_EXISTING_LABEL_SCENARIO)
+    project, digests = checked_project(tmp_path, scenario)
+    assert old in ASKS_ABOUT_IMAGE_EXISTING_LABEL_REPLY
+
+    with pytest.raises(AssertionError):
+        check(scenario, project, digests, ASKS_ABOUT_IMAGE_EXISTING_LABEL_REPLY.replace(old, new))
+
+
+def test_check_rejects_a_labelled_copy_written_before_the_user_answers_about_an_existing_label(tmp_path, label_tool):
+    scenario = load_scenario(IMAGE_EXISTING_LABEL_SCENARIO)
+    project, digests = checked_project(tmp_path, scenario)
+    assert label_tool("apply", project / "lamp.png", "--variant", "generated").returncode == 0
+
+    with pytest.raises(AssertionError):
+        check(scenario, project, digests, ASKS_ABOUT_IMAGE_EXISTING_LABEL_REPLY)
 
 
 # --- Creative Work: where the Label goes -----------------------------------------

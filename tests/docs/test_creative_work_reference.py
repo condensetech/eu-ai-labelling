@@ -54,3 +54,21 @@ def test_the_caption_is_printed_by_label_tool_with_its_options():
     assert "`--figcaption`" in caption, "no word on an image inside a <figure>"
     assert "`--dark`" in caption, "no word on a dark background"
 
+
+def test_the_image_and_its_surroundings_are_checked_for_an_existing_label_before_a_caption():
+    """The rule itself lives in SKILL.md (test_existing_label); creative-work.md
+    says where the check happens, next to the plugin's own caption marker."""
+    find = step(CREATIVE_MD.read_text(), "Find where the image is shown")
+    check = find.split("**An Existing Label:**", 1)[1].split("\n   - ", 1)[0]
+    # Before the branch that prints a caption to paste outside the project.
+    assert find.index("**An Existing Label:**") < find.index("If you find none"), (
+        "a caption can be printed before the check runs"
+    )
+    for sign in ('"AI generated" text', "AI icon", "caption"):
+        assert sign in check, f"the check never names {sign}"
+    assert "pixels" in check, "no look at the image itself"
+    assert re.search(r"[Aa]lt text that mentions AI is not one", check)
+    assert "**Alt text mention**" in check, "alt text that mentions AI loses its own handling"
+    assert "**An Existing Label** in SKILL.md" in check
+    assert "no caption until the user answers" in check
+    assert "Existing Label" in section(CREATIVE_MD.read_text(), "Done")

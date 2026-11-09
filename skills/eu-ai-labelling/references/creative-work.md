@@ -7,6 +7,7 @@ The caption follows the same conventions as a text Label (`references/text.md`):
 ## Steps
 
 1. **Find where the image is shown.** Search the document the user named, or else the project's Markdown and HTML files, for the image's file name (for example `satire.png` in `![...](images/satire.png)` or `<img src=".../satire.png">`). Each match is a candidate: keep it only when its path leads to this image file (a `hero.png` in another folder is another image), and it shows the image rather than linking to it or quoting it in a code example. Resolve a relative path from that document, and a root-relative URL (`/hero.png`) from the folder the site serves at its root, such as `public/` or `static/`; ignore any `?query` or `#fragment` and decode `%20`-style escapes. When you can't tell where a candidate points, ask the user. For a reference-style image (`![alt][r]`), the caption goes below the image, not the definition.
+   - **An Existing Label:** before adding or printing a caption, look at the image's pixels for an "AI generated" text or another AI icon, and read the text around each reference for a caption that already discloses AI involvement. Alt text that mentions AI is not one: it keeps its handling in **Alt text mention** below. When you find one, follow **An Existing Label** in SKILL.md, and add no caption until the user answers.
    - If you find none, ask the user where the image is published. If it is outside the project (a CMS, a social network), ask its language and whether it takes HTML or Markdown, print the caption with `--lang <code>` in place of `--document` (for Markdown, `--icon-path` is the URL the icon is uploaded at), and give them the caption and the alt text mention to paste there, saying you couldn't place it yourself.
    - If a `<!-- eu-ai-labelling: ... -->` marker already sits next to that reference, reuse that caption: bring its marker and text label to the wording now settled, and check the alt text mention (below). Add no second caption.
 
@@ -76,4 +77,5 @@ The step is done when each place the image is used either carries the caption (t
 - each document edited and where the caption went (below which image reference);
 - the text label and wording used;
 - for Markdown, the path of the copied SVG;
-- any place the image is used that you couldn't label, with the caption and alt text mention to paste there, as not yet placed.
+- any place the image is used that you couldn't label, with the caption and alt text mention to paste there, as not yet placed;
+- each Existing Label found: where it is and what it says.

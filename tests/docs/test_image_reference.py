@@ -101,3 +101,21 @@ def test_choosing_a_corner_starts_from_the_tools_suggestion_not_a_hand_swap():
     ask the agent to swap it in by hand."""
     choose = step((SKILL_DIR / "references" / "image.md").read_text(), "Choose a corner")
     assert "`suggested_corner`" in choose
+
+
+def test_the_image_is_checked_for_an_existing_label_before_a_labelled_copy_is_written():
+    """The rule itself lives in SKILL.md (test_existing_label); image.md says where
+    the check happens and what an Existing Label looks like for an image."""
+    image_md = (SKILL_DIR / "references" / "image.md").read_text()
+    look = step(image_md, "Look at the image yourself")
+    check = look.split("**An Existing Label:**", 1)[1]
+    for sign in ('"AI generated" text', "AI icon", "caption"):
+        assert sign in check, f"the check never names {sign}"
+    assert "document or page" in check, "no word on a caption near an image shown in a page"
+    # Alt text alone is no Existing Label: it keeps its own handling.
+    assert re.search(r"[Aa]lt text that mentions AI is not one", check)
+    assert "`references/update-references.md`" in check
+    assert "**An Existing Label** in SKILL.md" in check
+    assert "no Labelled Copy until the user answers" in check
+    # Before step 4 writes the Labelled Copy.
+    assert image_md.index("**An Existing Label:**") < image_md.index("4. **Apply the label.**")
