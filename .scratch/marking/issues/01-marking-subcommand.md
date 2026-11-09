@@ -1,0 +1,20 @@
+# 01: `marking` subcommand reads and grades a file's Marking
+
+**What to build:** A deterministic `label_tool.py marking <file>` subcommand for images and videos. It reads the five sources in the [spec](../spec.md), grades each signal as precise, vague or ignored, and applies the conflict rules. It prints one JSON object with the signals and the overall `settled` result. Nothing in the skill's procedure uses it yet (ticket 02).
+
+**Blocked by:** none
+
+**Status:** ready-for-agent
+
+- [ ] `c2pa-python` added to the script's inline dependencies. Under the `python3` fallback without it, the subcommand still runs and reports `c2pa: unavailable`.
+- [ ] Reads IPTC DigitalSourceType from XMP in PNG, JPEG, WebP, MP4 and MOV.
+- [ ] Reads C2PA manifests: Provider (claim generator / signer), actions, digitalSourceType and signature validity. It doesn't judge whether a signer is trustworthy.
+- [ ] Reads EXIF/XMP `Software`/`CreatorTool`, the generator PNG text chunks (`parameters`, `prompt`, `workflow`) and video container tags via ffprobe (`encoder`, `comment`, `com.apple.quicktime.*`). A video without ffmpeg/ffprobe gets the existing `video-tools` error handling.
+- [ ] Grading as in the spec:
+  - precise: `trainedAlgorithmicMedia` gives `generated`, `compositeWithTrainedAlgorithmicMedia` gives `modified`, from XMP or from a C2PA manifest whose signature validates;
+  - vague: the other AI-ish values, tool names, generator chunks, invalid or unsigned C2PA;
+  - ignored: human-origin values.
+- [ ] Conflict rules: a valid active C2PA manifest decides. Otherwise precise signals that disagree become vague. The output gives `settled: generated|modified|null` and the quotable signals for the origin question.
+- [ ] A file without any Marking gives `settled: null` and no signals, with no error.
+- [ ] The subcommand is documented in the script's docstring and `--help`.
+- [ ] Unit tests on small generated fixtures cover each source, each grade, both conflict rules, `c2pa: unavailable` and an unmarked file.
