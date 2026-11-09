@@ -58,7 +58,7 @@ Images get the **Fully AI-Generated** (`generated`) or **Partially AI-Modified**
 
 ## Report
 
-Add to the report of `SKILL.md` step 5: the Labelled Copy's path and the parameters used (`variant`, `corner`, `colour`, `plate`). Name the Marking that settled the Icon Variant, or its mismatch or agreement with the user's word, as SKILL.md **A Marking** says, and say that the Labelled Copy no longer carries the original's Marking.
+Add to the report of `SKILL.md` step 5: the Labelled Copy's path and the parameters used (`variant`, `corner`, `colour`, `plate`). Name the Marking that settled the Icon Variant, or its mismatch or agreement with the user's word, as SKILL.md **A Marking** says, and, when `apply` printed `marking_kept`, what the copy keeps of the Marking, as that rule words it.
 
 ## Overrides
 

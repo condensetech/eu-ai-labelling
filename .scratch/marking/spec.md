@@ -34,7 +34,7 @@ Step 2 of `SKILL.md` settles the [Icon Variant](../../GLOSSARY.md) from what the
 - **"Does it need a label?":** the answer mentions a Marking found as a fact ("the file's C2PA metadata says OpenAI generated it"), with no legal verdict.
 - **C2PA unavailable** (`c2pa-python` missing under the `python3` fallback): the subcommand still reads the other sources and reports `c2pa: unavailable`. The skill mentions that C2PA wasn't checked only when it ends up asking the origin question. Labelling is never blocked on it.
 - **Read errors:** when `marking` fails for any reason other than missing FFmpeg, the skill goes on as if the file carried no Marking.
-- **Labelled Copy:** the report says the copy no longer carries the original's Marking. Ticket 03 keeps the IPTC DigitalSourceType on the copy, and ticket 04 (needs triage) would sign a C2PA edit manifest with the user's own certificate.
+- **Labelled Copy:** the copy keeps the original's IPTC DigitalSourceType and IPTC AI fields (ticket 03); the report says "the copy keeps the IPTC DigitalSourceType; the original's C2PA provenance is not carried over" when `apply` or `video-apply` printed `marking_kept`. Ticket 04 (needs triage) would sign a C2PA edit manifest with the user's own certificate.
 
 ## Implementation shape
 

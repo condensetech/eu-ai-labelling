@@ -79,7 +79,7 @@ It prints JSON with `settled` (`generated`, `modified` or null), `settled_by` (t
 - When `c2pa` is `unavailable`, C2PA wasn't checked: say so only when you ask the origin question, and never hold up labelling for it.
 - **The user's word wins.** When the user named the variant, or said how AI was involved, and `settled` says the other one, label as they said, without asking. The preview and the report state the mismatch as a fact ("the file's XMP says trainedAlgorithmicMedia, which is Fully AI-Generated; labelled Partially AI-Modified, as you said"), never which one is right. When `settled` agrees with them, the report says so in one line; the preview doesn't.
 
-A Labelled Copy no longer carries the original's Marking: the report says so.
+A Labelled Copy keeps the original's IPTC DigitalSourceType, unchanged, and leaves its C2PA manifest behind. When `apply` or `video-apply` prints `marking_kept`, the report says, in the user's language: "the copy keeps the IPTC DigitalSourceType; the original's C2PA provenance is not carried over". Without `marking_kept`, the original had no such Marking: the report is silent about it.
 
 ## An Existing Label
 

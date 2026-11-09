@@ -97,8 +97,24 @@ def test_the_users_word_wins_and_a_mismatch_is_a_fact():
     assert "agrees" in word and "one line" in word and "preview doesn't" in word
 
 
-def test_the_labelled_copy_no_longer_carries_the_marking():
-    assert "no longer carries the original's Marking" in rule()
+KEPT = "the copy keeps the IPTC DigitalSourceType; the original's C2PA provenance is not carried over"
+
+
+def test_the_report_says_what_the_labelled_copy_keeps_only_when_the_tool_kept_it():
+    text = rule()
+    assert "no longer carries" not in text
+    kept = text.split("`marking_kept`", 1)[1].split("\n\n", 1)[0]
+    assert KEPT in kept, "the report line, word for word"
+    assert "`apply`" in text and "`video-apply`" in text
+
+
+def test_apply_prints_the_marking_kept_the_rule_reads(tmp_path):
+    markings.png(tmp_path / "photo.png", xmp=markings.xmp_packet("trainedAlgorithmicMedia"), size=(640, 480))
+    code, report = run_json(["uv", "run", "--quiet", str(SKILL_DIR / "scripts" / "label_tool.py"), "apply",
+                             "photo.png", "--variant", "generated"], tmp_path)
+
+    assert code == 0, report
+    assert report["marking_kept"]["DigitalSourceType"].endswith("trainedAlgorithmicMedia")
 
 
 def test_step_2_reads_the_marking_of_each_image_and_video_before_asking():
@@ -128,18 +144,28 @@ def test_the_batch_report_says_when_a_marking_agrees_with_the_users_word():
     assert "agrees with the user's word" in settled and "one line" in settled
 
 
+def test_the_batch_report_says_once_what_the_copies_keep():
+    report = step(reference("batch.md"), "Report the batch")
+    settled = report.split("**Settled by Marking:**", 1)[1].split("\n   - **", 1)[0]
+    assert "`marking_kept`" in settled and "say once" in settled
+    assert "IPTC DigitalSourceType" in settled and "C2PA provenance is not carried over" in settled
+    assert "no longer carry" not in report
+
+
 def test_the_image_preview_and_report_name_the_marking():
     image = reference("image.md")
     assert "SKILL.md **A Marking**" in step(image, "Show a preview")
     report = section(image, "Report")
-    assert "SKILL.md **A Marking**" in report and "no longer carries the original's Marking" in report
+    assert "SKILL.md **A Marking**" in report and "`marking_kept`" in report
+    assert "no longer carries" not in image
 
 
 def test_the_video_review_and_report_name_the_marking():
     video = reference("video.md")
     assert "SKILL.md **A Marking**" in step(video, "Show it for approval")
     report = section(video, "Report")
-    assert "SKILL.md **A Marking**" in report and "no longer carries the original's Marking" in report
+    assert "SKILL.md **A Marking**" in report and "`marking_kept`" in report
+    assert "no longer carries" not in video
 
 
 def test_the_skill_report_points_to_the_image_report():
