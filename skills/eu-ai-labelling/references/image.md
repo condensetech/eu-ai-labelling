@@ -41,7 +41,7 @@ Images get the **Fully AI-Generated** (`generated`) or **Partially AI-Modified**
    Add `--colour`, `--size`, `--plate` or `--no-plate` only for a user override. Without them the tool picks the Icon Colour and decides on the plate itself. It writes `<name>.ai-label.<ext>` next to the original and prints JSON with `labelled_copy` (its path), the parameters used (`variant`, `corner`, `colour`, `plate`) and `meets_threshold` (whether the label reaches 3:1 contrast; always true on a plate).
 
    Done when the command exits 0 and `labelled_copy` exists. If `meets_threshold` is false, tell the user in the preview (step 5) that the label is below 3:1 contrast and offer another corner, colour or a larger image.
-5. **Show a preview.** Open the Labelled Copy with your image-viewing tool and check it yourself: the icon is readable and covers nothing important. Then give the user its path, the corner, colour and size used, and whether a plate was drawn. Ask them to approve it or ask for a change.
+5. **Show a preview.** Open the Labelled Copy with your image-viewing tool and check it yourself: the icon is readable and covers nothing important. Then give the user its path, the corner, colour and size used, whether a plate was drawn, and the Marking that settled the Icon Variant or contradicts the user's word, as SKILL.md **A Marking** says. Ask them to approve it or ask for a change.
    - If the image is shown in a document or page and they would rather have a caption below it than an icon in the picture, follow `references/creative-work.md` instead. Delete the Labelled Copy if this run created it; one that existed before may already be shown by pages, so keep it and tell the user.
    - If they ask for a change, run `apply` again with the override. It replaces the previous Labelled Copy and still leaves the original untouched. Then show the new preview.
    - A Labelled Copy is **final** once the user approves it, or when they said beforehand that they don't need a preview. A copy re-applied after a change needs the same again.
@@ -55,6 +55,10 @@ Images get the **Fully AI-Generated** (`generated`) or **Partially AI-Modified**
    - `not_found`: find the file the user meant and run again.
    - `usage`: fix the command from its `--help` and run again.
    - Any other code (`unreadable_image`, `write_failed`, `internal`): tell the user what `error.message` says, in plain words, and stop.
+
+## Report
+
+Add to the report of `SKILL.md` step 5: the Labelled Copy's path and the parameters used (`variant`, `corner`, `colour`, `plate`). Name the Marking that settled the Icon Variant, or its mismatch or agreement with the user's word, as SKILL.md **A Marking** says, and say that the Labelled Copy no longer carries the original's Marking.
 
 ## Overrides
 

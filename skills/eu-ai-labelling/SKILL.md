@@ -22,9 +22,9 @@ Run the CLI with `uv run <skill folder>/scripts/label_tool.py <subcommand> ...`.
 When the user only asks whether a Label is required, answer as **Whether a Label is required** says, and enter these steps only once they ask for a Label.
 
 1. **Identify the content.** Find the file(s) the user means and their content type: image, video (a local video file) or text (Markdown or HTML). For any other content type (plain text, PDF, audio on its own), and for a video given as a URL to download or a live stream, tell the user this version labels images, local videos, Markdown and HTML, and adds label components to sites, and stop. A request to add AI labels to a website or web app as a reusable component ("add AI labels to my site") is a **site**: the content is the project itself, so there is no file to name. A folder, a glob or several files named in one request is a **batch**: list its files with the command in **Listing a batch** of `references/batch.md` (for a folder, the files directly inside it), which types each one as an image or a video and sets aside existing Labelled Copies (`*.ai-label.*`): they are never labelled again, so steps 2 and 3 skip them and the report lists them as skipped. Done when every file is named and typed.
-2. **Settle the Icon Variant.** It says how AI was involved, which only the user knows for sure:
-   - The user named the variant ("fully AI-generated", "AI-modified"): use it as given. **Fully AI-Generated** maps to `generated`, **Partially AI-Modified** to `modified`.
-   - Otherwise answer from context first: what the user said about the content, or that you made it yourself in this session. The name of an AI tool alone ("made with Midjourney", "ChatGPT helped") doesn't say which: these tools both create and edit. If context doesn't say, ask one plain question: did AI create it from scratch, or edit something that already existed (a real photo, a text a person wrote)? From scratch is **Fully AI-Generated**; an edit of something real is **Partially AI-Modified**. Wait for the answer before labelling (for a batch, ask it with the batch's other questions, as **A batch of files** says).
+2. **Settle the Icon Variant.** It says how AI was involved, which only the user knows for sure. First read the Marking of each image and video, as **A Marking** says, whether or not the user named the variant. Then:
+   - The user named the variant ("fully AI-generated", "AI-modified"): use it as given, whatever the Marking says. **Fully AI-Generated** maps to `generated`, **Partially AI-Modified** to `modified`.
+   - Otherwise answer from context first: what the user said about the content, that you made it yourself in this session, or a precise Marking. The name of an AI tool alone ("made with Midjourney", "ChatGPT helped") doesn't say which: these tools both create and edit. If context doesn't say, ask one plain question, quoting any vague Marking: did AI create it from scratch, or edit something that already existed (a real photo, a text a person wrote)? From scratch is **Fully AI-Generated**; an edit of something real is **Partially AI-Modified**. Wait for the answer before labelling (for a batch, ask it with the batch's other questions, as **A batch of files** says).
    - **Basic** is for documents and sites only: an image or a video can't be labelled with it. When the user names "basic" for an image or a video, ask whether it is fully AI-generated or AI-modified, then use **Fully AI-Generated** or **Partially AI-Modified** as named, once they answer.
    - For a Markdown or HTML document the icon is always **Basic**; the answer sets only the wording: "fully AI-generated" (or "AI-generated", "written by AI") is `generated`, "partially AI-modified" (or "AI-modified", "edited with AI") is `modified`. If they named only "basic", ask whether the text was generated or modified.
    - For a **site** the component always shows the **Basic** icon, with a text label passed in per use: skip this step and step 3.
@@ -49,7 +49,7 @@ When the user only asks whether a Label is required, answer as **Whether a Label
    A Labelled Copy of an image inside the project then goes through `references/update-references.md`, as the image and batch references say; a video's goes through step 8 of `references/video.md`, without any alt-text change.
 
    Done when the reference file's own completion criterion is met.
-5. **Report** what the reference files you followed ask you to report: for an image the Labelled Copy's path and the parameters used, for a video what `references/video.md` asks, for a batch the summary in `references/batch.md`, and after a Labelled Copy inside the project the reference lists from `references/update-references.md`. Name every Existing Label found: where it is and what it says. Close with this note: "This is not legal advice."
+5. **Report** what the reference files you followed ask you to report: for an image what `references/image.md` asks, for a video what `references/video.md` asks, for a batch the summary in `references/batch.md`, and after a Labelled Copy inside the project the reference lists from `references/update-references.md`. Name every Existing Label found: where it is and what it says. Close with this note: "This is not legal advice."
 
 ## Whether a Label is required
 
@@ -59,9 +59,27 @@ Never say whether the law requires a Label for some content, nor guess it. Wheth
 - the Code of Practice on transparency of AI-generated content: https://digital-strategy.ec.europa.eu/en/policies/code-practice-ai-generated-content
 - the AI Act Service Desk: https://ai-act-service-desk.ec.europa.eu/
 
-Before answering, look at the content as its reference does before labelling: read the document's text, open the image, read the project for a site; for a video, use only frames you already opened. When the content visibly has an Existing Label, say so as a fact: where it is and what it says.
+Before answering, look at the content as its reference does before labelling: read the document's text, open the image, read the project for a site; for a video, use only frames you already opened. When the content visibly has an Existing Label, say so as a fact: where it is and what it says. For an image or a video, also read its Marking as **A Marking** says, and mention a Marking found as a fact too ("the file's C2PA metadata says OpenAI generated it").
 
 Then offer to apply a Label, and label only if they say so. Don't change any file before they answer.
+
+## A Marking
+
+A **Marking** is the machine-readable signal a Provider embeds in an image or a video: C2PA or IPTC metadata, a generator's tags. It is evidence for the Icon Variant of step 2 only: it never says whether a Label is required, and it is not an Existing Label. Documents and sites have none to read. Read it for each image and video, each file of a batch included:
+
+```
+uv run <skill folder>/scripts/label_tool.py marking <file>
+```
+
+It prints JSON with `settled` (`generated`, `modified` or null), `settled_by` (the Marking that settled it, worded to quote), `quotes` (the Marking to quote when nothing is settled) and `c2pa` (`checked`, `unavailable` or `unreadable`). On `video_tools_missing`, check the tools as step 1 of `references/video.md` says, then read it again; on any other error, go on as if the file carried no Marking.
+
+- **Precise** (`settled` is `generated` or `modified`): it settles the Icon Variant as context does: don't ask. The preview and the report say which Marking settled it, quoting `settled_by` ("the file's C2PA manifest, signed by OpenAI, says trainedAlgorithmicMedia").
+- **Vague** (`settled` null, `quotes` not empty): it settles nothing. Quote each entry of `quotes` in the origin question of step 2: "the file's metadata says Stable Diffusion made it: did AI create it from scratch, or edit an existing image?"
+- **None** (`settled` null, `quotes` empty): settle the variant as if you had never read it, and never mention it: a missing Marking is no evidence that the content isn't AI.
+- When `c2pa` is `unavailable`, C2PA wasn't checked: say so only when you ask the origin question, and never hold up labelling for it.
+- **The user's word wins.** When the user named the variant, or said how AI was involved, and `settled` says the other one, label as they said, without asking. The preview and the report state the mismatch as a fact ("the file's XMP says trainedAlgorithmicMedia, which is Fully AI-Generated; labelled Partially AI-Modified, as you said"), never which one is right. When `settled` agrees with them, the report says so in one line; the preview doesn't.
+
+A Labelled Copy no longer carries the original's Marking: the report says so.
 
 ## An Existing Label
 
@@ -79,6 +97,7 @@ Each reference says where it looks for one, at the step where it already reads t
 Ask the questions of steps 2 and 3 once for the whole batch, not once per file, together with each video's visibility question (step 3 of `references/video.md`):
 
 - **Shared answers.** When the user or the context answers a question for the whole batch ("all of them were generated from scratch", "show it all the way through"), that answer holds for every file it concerns. Never ask again about a file whose answer is settled, by the user or by context.
+- **Marking.** A file whose Icon Variant a precise Marking settled is settled by context (**A Marking**): never name it in the one message. When every file is settled and nothing else is open, label the batch without a question.
 - **Per-file exceptions.** Ask a per-file question only where files differ: context answers it for some files but not others, or the user said the files differ. An exception the user named ("all generated, except intro.mp4, which is an edited real clip") settles that file and leaves the shared answer for the rest. Name the file or files each question is about in the question itself, and group files that share the question ("Were crowd.png and stage.png generated from scratch, or are they real photos edited with AI?"). Don't name, in any question, a file whose answers context already settles.
 - **One message.** Ask every open question, shared or per-file (Icon Variant, an image's caption or burn-in, a video's visibility), together in one message, and label nothing in the batch until they are answered. Say, for the visibility, what happens without a preference: it is settled per video by its length, `auto` (continuous up to 60 seconds, periodic beyond), so a batch of short and long videos needs no answer.
 - **Existing Labels.** Before sending the one message, open each image of the listing and look for an Existing Label as step 2 of `references/image.md` says. Put the question of **An Existing Label** for each image that has one in that one message, grouping the files that share it ("crowd.png and stage.png show 'AI generated' in their bottom-left corner: add the EU Icon anyway, or leave them as they are?"). A video's shows only in the frames of its `video-preview`, which needs the batch's answers: ask about it in the one placement question of step 5 of `references/batch.md`, before its `video-apply`. Never ask again about a file whose answer is settled, by the user or by the request.
