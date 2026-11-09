@@ -128,8 +128,7 @@ sufficient, adequate or compliant (or the opposite) outside a "whether". With `a
 to add the EU Icon anyway or leave the content, and `labelled: false` with no
 `text_label` keeps every file's bytes; with `asks: false` the request already
 settled it, so the content is labelled and the Existing Label kept (for a
-document, `text_label` keeps every original line). No reply, in any scenario, may say
-the content has no Existing Label.
+document, `text_label` keeps every original line).
 
 Running the scenarios is opt-in, because it calls the model: set
 EU_AI_LABELLING_E2E_DIR to a throwaway directory. The checks on canned
@@ -286,11 +285,6 @@ DEFAULT_LENGTH = r"\b60\s*-?\s*(?:s\b|sec)|\b(?:one|1|a) minute"
 LABEL_ANYWAY = r"\banyway\b|\bstill\b|\bleave\b|\bas it is\b|\bkeep\b"
 # A verdict on an Existing Label's adequacy, which the skill never gives.
 ADEQUACY = r"\b(?:in)?sufficient\b|\b(?:in)?adequate\b|\b(?:non-?)?compliant\b|\bsatisf(?:y|ies|actory)\b"
-# A claim that no Existing Label is there, which the skill never makes.
-ABSENCE_RE = re.compile(
-    r"\bno (?:existing|other|prior|pre-?existing|on-?screen|visible) (?:ai )?(?:label|disclaimer|disclosure|notice)s?\b"
-    r"|\b(?:didn't|did not|couldn't|could not) (?:find|see|spot) (?:an?|any) (?:existing |other |on-?screen )?(?:ai )?(?:label|disclaimer|disclosure|notice)"
-)
 
 # The wording each image Icon Variant takes, by the name a scenario gives it.
 VARIANT_WORDING = {"fully ai-generated": "generated", "partially ai-modified": "modified"}
@@ -345,8 +339,6 @@ def check(scenario: dict, project: Path, digests: dict[str, str], reply: str) ->
 
     # Never a verdict on the law, whatever the scenario.
     assert not verdicts(text), f"the reply says whether a Label is required: {verdicts(text)}\n{reply}"
-    # Never a claim that the content has no Existing Label.
-    assert not ABSENCE_RE.search(text), f"the reply says there is no Existing Label:\n{reply}"
 
     if expect.get("asks_if_required"):
         assert GUIDANCE.search(text), f"no pointer to the official Guidelines:\n{reply}"
@@ -1245,19 +1237,6 @@ def test_check_accepts_asking_about_an_existing_label(tmp_path, extra):
     project, digests = checked_project(tmp_path, scenario)
 
     check(scenario, project, digests, ASKS_ABOUT_EXISTING_LABEL_REPLY + extra)
-
-
-@pytest.mark.parametrize("claim", [
-    "I found no existing label in post.md.",
-    "I didn't find any other AI disclaimer in post.md.",
-    "I read the file. It has no visible AI disclosure, such as a disclaimer line.",
-])
-def test_check_rejects_claiming_no_existing_label(tmp_path, label_tool, claim):
-    scenario = load_scenario("italian-article")
-    project, digests = labelled_document(tmp_path, scenario, LABELLED_ITALIAN_ARTICLE)
-
-    with pytest.raises(AssertionError):
-        check(scenario, project, digests, f"{NAMED_VARIANT_REPLY} {claim}")
 
 
 @pytest.mark.parametrize("weakened", sorted(WEAKENED_EXISTING_LABEL_REPLIES))
@@ -2167,13 +2146,6 @@ def test_check_rejects_labelling_a_video_before_the_user_answers_about_its_notic
         check(scenario, project, digests, ASKS_ABOUT_ON_SCREEN_NOTICE_REPLY)
 
 
-@needs_ffmpeg
-def test_check_rejects_claiming_no_on_screen_notice(tmp_path, label_tool):
-    scenario, project, digests, video = video_project(tmp_path, "video-fully-generated")
-    apply_video(label_tool, video)
-
-    with pytest.raises(AssertionError):
-        check(scenario, project, digests, f"{VIDEO_REPLY} I found no on-screen AI notice in the frames.")
 
 
 # --- An Existing Label in an answer on whether a Label is required ---------------

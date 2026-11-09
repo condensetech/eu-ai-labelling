@@ -243,7 +243,6 @@ def test_the_sampled_frames_are_checked_for_an_existing_label_before_applying():
     assert preview.index("Open every written frame") < preview.index("**An Existing Label:**")
     assert "on-screen" in check and "frame times" in check, "the check never says what to note"
     assert "**An Existing Label** in SKILL.md" in check and "before running `video-apply`" in check
-    assert "`sampling_note`" in check, "the check never says sampling can't rule one out"
     assert "preview waiver skips the user's review, not this check" in check
     assert "answered any question about an Existing Label" in preview.split("Done when", 1)[1]
     assert "Existing Label" in section(text, "Report")

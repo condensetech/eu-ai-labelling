@@ -15,7 +15,7 @@ The skill avoids adding a second Label only when the Label carries its own `<!--
 - **No adequacy verdict.** Never call an Existing Label sufficient or insufficient. A wording mismatch is stated as a fact.
 - **Labelling anyway:** add the EU Icon in its usual place. Never edit or remove the Existing Label. Remove or replace it only when the user explicitly asks, as a plain edit outside the labelling procedure.
 - **User already decided:** when the request already deals with the Existing Label ("burn it in even though it has a watermark", "replace our disclaimer with the EU label"), don't ask. The report still names the Existing Label.
-- **No absence claims.** Mention an Existing Label only when one is found. Never report "no Existing Label found", because looking at an image by eye and sampling video frames can't guarantee that.
+- **None found, go on; in doubt, ask.** When the check finds no Existing Label, labelling goes on as usual. When it finds one, or something it can't tell for sure is one, it asks. (Changed on 2026-11-09: this replaces an earlier "no absence claims" rule, which the evals showed agents couldn't follow and which made the skill defensive.)
 - **Batches:** the "label anyway?" question goes into the batch's single message, with files grouped by name like the other per-file exceptions. A file the user declines goes under **Skipped** with the reason "Existing Label kept, no EU Icon added".
 - **"Does it need a label?":** when the content visibly has an Existing Label, the answer says so as a fact, alongside the official sources as today, with no legal verdict.
 
