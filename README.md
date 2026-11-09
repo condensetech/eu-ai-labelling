@@ -316,6 +316,10 @@ Notes:
 - With the `claude` CLI installed, `tests/plugin/` also installs the plugin from the marketplace into a throwaway Claude Code config, confirms that the bare `/eu-ai-labelling` resolves to the skill, and labels an image with the installed copy's own tool and icons.
 - Codex is checked statically: the plugin is followed from the marketplace to `.codex-plugin/plugin.json`. That assumes Codex reads `.claude-plugin/marketplace.json`, confirmed by hand with codex-cli 0.166.0. **Before a release**, try the plugin by hand in Codex: install it from `/plugins` and run `$eu-ai-labelling label photo.png as fully AI-generated`.
 
+### Releases
+
+A release bumps `version` in `.claude-plugin/plugin.json`, in the plugin's entry of `.claude-plugin/marketplace.json` and in `.codex-plugin/plugin.json`, and is tagged `v<version>`, for example `v0.1.0`. That tag is what users pin with `npx skills add condensetech/eu-ai-labelling#v0.1.0`. `tests/plugin/` fails unless the three versions agree. `pyproject.toml`'s version belongs to the test project and stays as it is.
+
 ### Headless tests and evals
 
 Tests marked `claude_cli` are skipped when the `claude` CLI is not installed. Tests marked `model` call the model, so they are opt-in. Point `EU_AI_LABELLING_E2E_DIR` at a throwaway directory; each test creates its own project there:

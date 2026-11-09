@@ -4,8 +4,8 @@
 
 **Blocked by:** none
 
-**Status:** ready-for-agent
+**Status:** resolved
 
-- [ ] A fast test fails unless `version` in `.claude-plugin/plugin.json`, the plugin entry of `.claude-plugin/marketplace.json` and `.codex-plugin/plugin.json` are equal. `pyproject.toml` is left out.
-- [ ] The README's **Tests** or release notes (wherever release steps fit best) say that a release bumps all three and is tagged `v<version>`.
+- [x] A fast test fails unless `version` in `.claude-plugin/plugin.json`, the plugin entry of `.claude-plugin/marketplace.json` and `.codex-plugin/plugin.json` are equal. `pyproject.toml` is left out.
+- [x] The README's **Tests** or release notes (wherever release steps fit best) say that a release bumps all three and is tagged `v<version>`.
 - [ ] Tagging `v0.1.0` and pushing it is the maintainer's step, after this ticket and 01 and 03 are merged: the agent doesn't push tags.

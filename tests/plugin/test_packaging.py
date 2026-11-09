@@ -29,6 +29,13 @@ def load_json(relative: str) -> dict:
     return json.loads((REPO_ROOT / relative).read_text())
 
 
+def marketplace_entry() -> dict:
+    """The plugin's one entry in the Claude Code marketplace."""
+    entries = [p for p in load_json(".claude-plugin/marketplace.json")["plugins"] if p["name"] == PLUGIN_NAME]
+    assert len(entries) == 1, entries
+    return entries[0]
+
+
 def frontmatter(skill_md: Path) -> dict[str, str]:
     text = skill_md.read_text()
     match = re.match(r"^---\n(.*?)\n---\n", text, re.S)
@@ -79,6 +86,22 @@ def referenced_paths(skill_dir: Path) -> set[str]:
     return found
 
 
+# --- Releases --------------------------------------------------------------
+
+
+def test_the_three_manifests_name_the_same_release_version():
+    # A release is tagged `v<version>`, so all three must agree on it.
+    # pyproject.toml's version is the test project's, not the plugin's.
+    versions = {
+        ".claude-plugin/plugin.json": load_json(".claude-plugin/plugin.json").get("version"),
+        ".claude-plugin/marketplace.json": marketplace_entry().get("version"),
+        ".codex-plugin/plugin.json": load_json(".codex-plugin/plugin.json").get("version"),
+    }
+
+    assert all(re.fullmatch(r"\d+\.\d+\.\d+", v or "") for v in versions.values()), versions
+    assert len(set(versions.values())) == 1, versions
+
+
 # --- Claude Code -----------------------------------------------------------
 
 
@@ -87,20 +110,18 @@ def test_claude_marketplace_lists_the_plugin_from_this_repository():
     plugin = load_json(".claude-plugin/plugin.json")
 
     assert marketplace["name"] == PLUGIN_NAME
-    entries = [p for p in marketplace["plugins"] if p["name"] == PLUGIN_NAME]
-    assert len(entries) == 1
+    entry = marketplace_entry()
     # A source in the same repository is a ./ path, resolved from the
     # marketplace root (the repo). Codex reads this marketplace too, and
     # installs the Codex manifest from the same folder.
-    path = entries[0]["source"] if isinstance(entries[0]["source"], str) else entries[0]["source"]["path"]
+    path = entry["source"] if isinstance(entry["source"], str) else entry["source"]["path"]
     assert path.startswith("./")
     source = (REPO_ROOT / path).resolve()
     assert source.is_relative_to(REPO_ROOT)
     assert (source / ".claude-plugin" / "plugin.json").is_file()
     assert (source / ".codex-plugin" / "plugin.json").is_file()
     assert plugin["name"] == PLUGIN_NAME
-    assert entries[0].get("version", plugin["version"]) == plugin["version"]
-    assert plugin["license"] == entries[0].get("license", "MIT") == "MIT"
+    assert plugin["license"] == entry.get("license", "MIT") == "MIT"
     assert (REPO_ROOT / "LICENSE").read_text().startswith("MIT License")
 
 
@@ -120,10 +141,8 @@ def test_claude_plugin_validate_accepts_the_plugin_and_its_manifests(target):
 
 def test_codex_manifest_points_at_the_shared_skills_folder():
     codex = load_json(".codex-plugin/plugin.json")
-    claude = load_json(".claude-plugin/plugin.json")
 
     assert codex["name"] == PLUGIN_NAME
-    assert codex["version"] == claude["version"]
     assert codex["description"]
     assert codex["license"] == "MIT"
     skills_root = (REPO_ROOT / codex["skills"]).resolve()
