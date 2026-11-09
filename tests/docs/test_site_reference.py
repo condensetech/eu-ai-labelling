@@ -22,7 +22,7 @@ from html.parser import HTMLParser
 
 import pytest
 
-from helpers import SKILL_DIR, fenced, section
+from helpers import SKILL_DIR, fenced, section, step
 
 SITE_MD = SKILL_DIR / "references" / "site.md"
 
@@ -317,3 +317,17 @@ def test_copy_step_puts_both_official_svgs_in_the_project():
     copy = section(SITE_MD.read_text(), "Copy the icons")
     commands = [line for block in fenced(copy) for line in block.splitlines() if "copy-icons" in line]
     assert len(commands) == 1 and "--colour both" in commands[0] and "--to <static folder>" in commands[0]
+
+
+def test_the_project_is_checked_for_an_existing_label_while_reading_it():
+    """The rule itself lives in SKILL.md (test_existing_label); site.md says where
+    the check happens and what an Existing Label looks like in a project."""
+    read = step(section(SITE_MD.read_text(), "Steps"), "Read the project")
+    assert "**An Existing Label:**" in read, "reading the project doesn't check for an Existing Label"
+    check = read.split("**An Existing Label:**", 1)[1]
+    for sign in ("AI-label component", "AI disclaimer"):
+        assert sign in check, f"the check never names {sign}"
+    assert "**An Existing Label** in SKILL.md" in check
+    # Labelling anyway adds this plugin's component beside the project's own, never in its place.
+    assert "untouched" in check, "the check doesn't keep the project's own label"
+    assert "Existing Label" in section(SITE_MD.read_text(), "Done")
