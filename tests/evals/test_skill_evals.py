@@ -7,7 +7,8 @@ project, the prompt to send and the behaviour expected back:
       "description": "...",
       "files": {"speech.png": {"image": [w, h]}, "post.md": {"text": "..."},
                 "lamp.png": {"image": [w, h], "pixel_text": "AI generated"},   # text drawn black, bottom-left
-                "clip.mp4": {"video": {"seconds": s, "size": "WxH"}}},   # encoded by the local ffmpeg
+                "clip.mp4": {"video": {"seconds": s, "size": "WxH",    # encoded by the local ffmpeg
+                                       "notice": "..."}}},   # optional: text on screen throughout
       "prompt": "/eu-ai-labelling ...",
       "expect": {
         "variant": "Fully AI-Generated" | "Partially AI-Modified" | "Basic",
@@ -287,8 +288,8 @@ LABEL_ANYWAY = r"\banyway\b|\bstill\b|\bleave\b|\bas it is\b|\bkeep\b"
 ADEQUACY = r"\b(?:in)?sufficient\b|\b(?:in)?adequate\b|\b(?:non-?)?compliant\b|\bsatisf(?:y|ies|actory)\b"
 # A claim that no Existing Label is there, which the skill never makes.
 ABSENCE_RE = re.compile(
-    r"\bno (?:existing|other|prior|pre-?existing) (?:ai )?(?:label|disclaimer|disclosure|notice)s?\b"
-    r"|\b(?:didn't|did not|couldn't|could not) (?:find|see|spot) (?:an?|any) (?:existing |other )?(?:ai )?(?:label|disclaimer|disclosure|notice)"
+    r"\bno (?:existing|other|prior|pre-?existing|on-?screen) (?:ai )?(?:label|disclaimer|disclosure|notice)s?\b"
+    r"|\b(?:didn't|did not|couldn't|could not) (?:find|see|spot) (?:an?|any) (?:existing |other |on-?screen )?(?:ai )?(?:label|disclaimer|disclosure|notice)"
 )
 
 # The wording each image Icon Variant takes, by the name a scenario gives it.
@@ -2048,3 +2049,74 @@ def test_check_rejects_labelling_a_video_before_the_visibility_is_settled(tmp_pa
 
     with pytest.raises(AssertionError):
         check(scenario, project, digests, ASKS_VISIBILITY_REPLY)
+
+
+# --- An Existing Label in a video: an on-screen notice ------------------------------
+
+ASKS_ABOUT_ON_SCREEN_NOTICE_REPLY = """\
+clip.mp4 already shows a Label this plugin didn't add: "Generated with AI", at the bottom centre
+of the picture, in every frame I looked at (0.2 s, 0.6 s, 1.0 s, 1.4 s and 1.8 s). Its wording
+matches the fully AI-generated wording you chose. Frames I didn't look at may differ.
+
+Should I add the EU Icon at the top-right anyway, or leave clip.mp4 as it is?
+"""
+
+WEAKENED_ON_SCREEN_NOTICE_REPLIES = {
+    "doesn't say what it says": ('"Generated with AI", at', "a notice, at"),
+    "no place on the picture": ("at the bottom centre\nof the picture, ", ""),
+    "no frame times": (
+        "in every frame I looked at (0.2 s, 0.6 s, 1.0 s, 1.4 s and 1.8 s)", "in the frames I looked at",
+    ),
+    "doesn't ask": (
+        "Should I add the EU Icon at the top-right anyway, or leave clip.mp4 as it is?", "I left clip.mp4 as it is.",
+    ),
+}
+
+
+@needs_ffmpeg
+def test_the_on_screen_notice_fixture_shows_its_notice(tmp_path):
+    from videos import frame_images
+
+    _, _, _, video = video_project(tmp_path, "existing-label-video-notice")
+    frame = frame_images(video)[0]
+    width, height = frame.size
+    bottom, top = frame.crop((0, height * 3 // 4, width, height)), frame.crop((0, 0, width, height // 4))
+    # Antialiased white text with a black outline takes many colours; flat colour, a few after encoding.
+    assert len(bottom.getcolors(1 << 16)) > 10, "no notice at the bottom of the picture"
+    assert len(top.getcolors(1 << 16)) <= 3, "the top of the picture is not flat"
+
+
+@needs_ffmpeg
+def test_check_accepts_asking_about_an_on_screen_notice(tmp_path):
+    scenario, project, digests, _ = video_project(tmp_path, "existing-label-video-notice")
+
+    check(scenario, project, digests, ASKS_ABOUT_ON_SCREEN_NOTICE_REPLY)
+
+
+@needs_ffmpeg
+@pytest.mark.parametrize("weakened", sorted(WEAKENED_ON_SCREEN_NOTICE_REPLIES))
+def test_check_rejects_a_weak_reply_on_an_on_screen_notice(tmp_path, weakened):
+    scenario, project, digests, _ = video_project(tmp_path, "existing-label-video-notice")
+    old, new = WEAKENED_ON_SCREEN_NOTICE_REPLIES[weakened]
+    assert old in ASKS_ABOUT_ON_SCREEN_NOTICE_REPLY
+
+    with pytest.raises(AssertionError):
+        check(scenario, project, digests, ASKS_ABOUT_ON_SCREEN_NOTICE_REPLY.replace(old, new))
+
+
+@needs_ffmpeg
+def test_check_rejects_labelling_a_video_before_the_user_answers_about_its_notice(tmp_path, label_tool):
+    scenario, project, digests, video = video_project(tmp_path, "existing-label-video-notice")
+    apply_video(label_tool, video)
+
+    with pytest.raises(AssertionError):
+        check(scenario, project, digests, ASKS_ABOUT_ON_SCREEN_NOTICE_REPLY)
+
+
+@needs_ffmpeg
+def test_check_rejects_claiming_no_on_screen_notice(tmp_path, label_tool):
+    scenario, project, digests, video = video_project(tmp_path, "video-fully-generated")
+    apply_video(label_tool, video)
+
+    with pytest.raises(AssertionError):
+        check(scenario, project, digests, f"{VIDEO_REPLY} I found no on-screen AI notice in the frames.")

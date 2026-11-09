@@ -14,10 +14,11 @@ import shutil
 import stat
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 
 import pytest
-from PIL import Image, ImageChops
+from PIL import Image, ImageChops, ImageDraw, ImageFont
 
 FFMPEG = shutil.which("ffmpeg")
 FFPROBE = shutil.which("ffprobe")
@@ -104,15 +105,32 @@ def changed(before: Image.Image, after: Image.Image, threshold: int = 24):
 # --- Fixtures ------------------------------------------------------------------
 
 def flat_mp4(path: Path, seconds: float = 2, size: str = "320x180", rate: int = 25, colour: str = "0x5aa0d2",
-             audio: bool = False, codec: str = "libx264", extra: tuple = ()) -> Path:
-    """A flat-colour video: any pixel the Label changes shows up as a difference."""
+             audio: bool = False, codec: str = "libx264", extra: tuple = (), notice: str | None = None) -> Path:
+    """A flat-colour video: any pixel the Label changes shows up as a difference.
+    With `notice`, that text shows at the bottom centre for the whole video, as
+    an on-screen AI disclosure (an Existing Label) would."""
     args = ["-f", "lavfi", "-i", f"color=c={colour}:s={size}:r={rate}:d={seconds}"]
     if audio:
         args += ["-f", "lavfi", "-i", f"sine=frequency=440:sample_rate=48000:duration={seconds}"]
-    args += ["-c:v", codec, "-pix_fmt", "yuv420p"]
-    if audio:
-        args += ["-c:a", "aac" if path.suffix in (".mp4", ".mov") else "libopus", "-shortest"]
-    ffmpeg(*args, *extra, path)
+    with tempfile.TemporaryDirectory() as scratch:
+        if notice is not None:
+            args += ["-i", notice_card(Path(scratch) / "notice.png", size, notice),
+                     "-filter_complex", "[0:v][1:v]overlay"]
+        args += ["-c:v", codec, "-pix_fmt", "yuv420p"]
+        if audio:
+            args += ["-c:a", "aac" if path.suffix in (".mp4", ".mov") else "libopus", "-shortest"]
+        ffmpeg(*args, *extra, path)
+    return path
+
+
+def notice_card(path: Path, size: str, notice: str) -> Path:
+    """A transparent PNG of `size` with `notice` in white at the bottom centre, to
+    overlay on a video: drawn by Pillow, since not every ffmpeg build has drawtext."""
+    width, height = map(int, size.split("x"))
+    card = Image.new("RGBA", (width, height), (0, 0, 0, 0))
+    ImageDraw.Draw(card).text((width // 2, height * 7 // 8), notice, fill="white", anchor="mm",
+                              font=ImageFont.load_default(size=height // 12), stroke_width=2, stroke_fill="black")
+    card.save(path)
     return path
 
 

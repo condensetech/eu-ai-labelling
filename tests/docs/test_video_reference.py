@@ -234,6 +234,21 @@ def test_the_corner_is_chosen_from_the_previews_before_applying():
     assert "run `video-preview` again" in preview
 
 
+def test_the_sampled_frames_are_checked_for_an_existing_label_before_applying():
+    """The rule itself lives in SKILL.md (test_existing_label); video.md says the
+    check happens on the frames already opened to choose the corner."""
+    text = VIDEO_MD.read_text()
+    preview = step(text, "Preview and choose the corner")
+    check = preview.split("**An Existing Label:**", 1)[1].split("\n\n", 1)[0]
+    assert preview.index("Open every written frame") < preview.index("**An Existing Label:**")
+    assert "on-screen" in check and "frame times" in check, "the check never says what to note"
+    assert "**An Existing Label** in SKILL.md" in check and "before running `video-apply`" in check
+    assert "`sampling_note`" in check, "the check never says sampling can't rule one out"
+    assert "preview waiver skips the user's review, not this check" in check
+    assert "answered any question about an Existing Label" in preview.split("Done when", 1)[1]
+    assert "Existing Label" in section(text, "Report")
+
+
 def test_approval_says_what_previews_do_and_do_not_establish():
     approval = step(VIDEO_MD.read_text(), "Show it for approval")
     assert "`sampling_note`" in approval and "in every frame" in approval

@@ -4,8 +4,8 @@
 
 **Blocked by:** 01
 
-**Status:** ready-for-agent
+**Status:** resolved
 
-- [ ] While looking at the sampled frames, note any on-screen disclosure of AI involvement. If one is found, report it with the frame times it appears at, and ask before running `video-apply`.
-- [ ] Never claim the video has no Existing Label: sampling can't establish that, as the `sampling_note` already says.
-- [ ] Doc test for `video.md`. An eval scenario only if a fixture with an on-screen disclosure is cheap to build; otherwise record in a comment why it was left out.
+- [x] While looking at the sampled frames, note any on-screen disclosure of AI involvement. If one is found, report it with the frame times it appears at, and ask before running `video-apply`.
+- [x] Never claim the video has no Existing Label: sampling can't establish that, as the `sampling_note` already says.
+- [x] Doc test for `video.md`. An eval scenario only if a fixture with an on-screen disclosure is cheap to build; otherwise record in a comment why it was left out.

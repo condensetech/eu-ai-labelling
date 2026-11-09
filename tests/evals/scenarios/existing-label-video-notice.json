@@ -1,0 +1,22 @@
+{
+  "description": "A video that already shows its own \"Generated with AI\" notice on screen: the skill notes it in the frames sampled for the corner, says what it says and at which frame times, and asks whether to add the EU Icon anyway before writing a Labelled Copy.",
+  "files": {
+    "clip.mp4": {
+      "video": {
+        "seconds": 2,
+        "size": "640x360",
+        "notice": "Generated with AI"
+      }
+    }
+  },
+  "prompt": "/eu-ai-labelling label clip.mp4 as fully AI-generated, with the label shown for the whole video.",
+  "expect": {
+    "variant": "Fully AI-Generated",
+    "labelled": false,
+    "existing_label": {
+      "says": "generated with ai",
+      "where": "^(?=[\\s\\S]*\\b(?:bottom|lower)\\b)(?=[\\s\\S]*(?:\\b\\d+(?:[.,]\\d+)? ?s(?:ec(?:ond)?s?)?\\b|\\b\\d+:\\d\\d\\b))",
+      "asks": true
+    }
+  }
+}
