@@ -16,7 +16,8 @@
     "variant": "Partially AI-Modified",
     "labelled": true,
     "reply_matches": [
-      "xmp|iptc|digitalsourcetype|trainedalgorithmicmedia|metadata|marking"
+      "xmp|iptc|digitalsourcetype|trainedalgorithmicmedia",
+      "trainedalgorithmicmedia|fully ai-generated|from scratch"
     ]
   }
 }
