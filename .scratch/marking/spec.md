@@ -24,15 +24,16 @@ Step 2 of `SKILL.md` settles the [Icon Variant](../../GLOSSARY.md) from what the
     - `algorithmicallyEnhanced`, `compositeSynthetic` and `algorithmicMedia`;
     - an AI tool named in `Software`/`CreatorTool` or in container tags (step 2's rule holds: a tool's name alone doesn't say which variant);
     - generator PNG chunks;
-    - a C2PA manifest that is invalid or unsigned.
+    - the AI claims of a C2PA manifest whose signature doesn't validate: its precise codes, or an AI tool named as its generator or signer. An invalid manifest with no AI claim gives no signal: it says nothing about AI.
   - **Ignored.** `digitalCapture`, `digitalArt` and the other human-origin values, treated as if no Marking were found.
 - **No Marking found** is never evidence that content isn't AI, and is never mentioned.
-- **Conflicts inside one file:** the active C2PA manifest decides when its signature validates. Otherwise precise signals that disagree all become vague, and the question quotes each one.
+- **Conflicts inside one file:** the active C2PA manifest decides when its signature validates. Otherwise precise signals that disagree all become vague, and the question quotes each one. A valid active manifest whose own actions disagree (created by AI, then edited with AI) decides nothing: its signals become vague and the skill asks. An AI source type in an ingredient's manifest describes the ingredient, not the file, so it is vague.
 - **The user's word wins** over the Marking. The skill labels as the user said, without asking. The preview and the report state the mismatch as a fact, with no verdict on which is right.
 - **Agreement:** when the user named the variant and the Marking agrees, the final report says so in one line; the preview doesn't.
 - **Batches:** a file settled by a precise Marking counts as settled by context, so the batch's one message never names it. When every file is settled and nothing else is open, the batch is labelled without a question. The batch report lists the files settled by Marking.
 - **"Does it need a label?":** the answer mentions a Marking found as a fact ("the file's C2PA metadata says OpenAI generated it"), with no legal verdict.
 - **C2PA unavailable** (`c2pa-python` missing under the `python3` fallback): the subcommand still reads the other sources and reports `c2pa: unavailable`. The skill mentions that C2PA wasn't checked only when it ends up asking the origin question. Labelling is never blocked on it.
+- **Read errors:** when `marking` fails for any reason other than missing FFmpeg, the skill goes on as if the file carried no Marking.
 - **Labelled Copy:** the report says the copy no longer carries the original's Marking. Preserving the Marking is a separate ticket (03).
 
 ## Implementation shape
