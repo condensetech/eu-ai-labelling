@@ -41,11 +41,14 @@ Subcommands:
 `apply` and `video-apply` (MP4, MOV) write into the copy's XMP the original's
 IPTC DigitalSourceType and IPTC AI fields (AISystemUsed, AISystemVersionUsed,
 AIPromptInformation, AIPromptWriterName), unchanged, and print them as
-`marking_kept`; with no such field the copy gets no XMP and no `marking_kept`.
-The DigitalSourceType comes from the original's XMP, or from its active C2PA
-manifest when that one settles the Icon Variant (see `marking`). Nothing else
-of the original's XMP is kept (no xmpMM:InstanceID, no dcterms:provenance), nor
-its C2PA manifest, whose hard binding the copy no longer matches.
+`marking_kept`, as the written copy carries them; with no such field the copy
+gets no XMP and no `marking_kept`. The copy settles the variant the original
+settles (see `marking`): its DigitalSourceType is the code that settles it,
+from the XMP or the active C2PA manifest, and none when the original's precise
+signals contradict each other. Nothing else of the original's XMP is kept (no
+xmpMM:InstanceID, no dcterms:provenance), nor its C2PA manifest, whose hard
+binding the copy no longer matches: `c2pa_left_behind: true` says the original
+had a C2PA Marking.
 
 Both subcommands refuse animated images (`animated_image`), SVG
 (`svg_image`) and any other format, such as BMP, TIFF or a still GIF
@@ -811,7 +814,7 @@ def cmd_apply(args: argparse.Namespace) -> dict:
     overlay.alpha_composite(icon, (x, y))
     labelled = burn_in(source, overlay)
     metadata = matching_profile_only(metadata, labelled.mode)
-    kept = kept_marking(original, image_xmp(original))
+    kept, c2pa_left_behind = kept_marking(original, image_xmp(original))
     if kept:
         metadata.update(xmp_options(image_format, xmp_for_copy(kept)))
     # An existing copy that is a link to the original (or anything else) is
@@ -836,8 +839,12 @@ def cmd_apply(args: argparse.Namespace) -> dict:
     }
     if plate_box:
         result["plate_box"] = plate_box
+    # Pillow 10 ignores a JPEG's `xmp` option: report what the copy carries, not what was asked of it.
+    kept = iptc_fields(image_xmp(target)) if kept else {}
     if kept:
         result["marking_kept"] = kept
+    if c2pa_left_behind:
+        result["c2pa_left_behind"] = True
     return result
 
 
@@ -2885,7 +2892,9 @@ def cmd_video_apply(args: argparse.Namespace) -> dict:
     video, display, duration, visibility = info["video"], plan["display"], plan["duration"], plan["visibility"]
     target = labelled_copy_path(original)
     # ffmpeg's -map_metadata carries no XMP (measured with FFmpeg 9): it is written after encoding.
-    kept = kept_marking(original, video_xmp(original)) if path["muxer"] in VIDEO_XMP_MUXERS else {}
+    xmp_muxer = path["muxer"] in VIDEO_XMP_MUXERS
+    kept, c2pa_left_behind = kept_marking(original, video_xmp(original) if xmp_muxer else [])
+    kept = kept if xmp_muxer else {}
     with tempfile.TemporaryDirectory(prefix="eu-ai-labelling-") as work:
         work = Path(work)
         label = draw_label(args, plan, work)
@@ -2930,6 +2939,7 @@ def cmd_video_apply(args: argparse.Namespace) -> dict:
         },
         "validation": {"passed": True, "checks": checks},
         **({"marking_kept": kept} if kept else {}),
+        **({"c2pa_left_behind": True} if c2pa_left_behind else {}),
     }
 
 
@@ -3527,18 +3537,22 @@ def image_xmp(path: Path) -> list[bytes]:
         return xmp_blobs(image)
 
 
-def kept_marking(original: Path, blobs: list[bytes]) -> dict:
-    """The IPTC fields the Labelled Copy of `original` keeps. The DigitalSourceType is the XMP's, unless the
-    active C2PA manifest settles the Icon Variant with another one: then it is the manifest's, so that the
-    copy settles the variant the original settles."""
+def kept_marking(original: Path, blobs: list[bytes]) -> tuple[dict, bool]:
+    """The IPTC fields the Labelled Copy of `original` keeps, and whether a C2PA Marking of the original is
+    left behind. The copy settles the variant the original settles (see `marking`): when the Marking settles
+    one, the DigitalSourceType is the code that settles it, as the XMP writes it if the XMP has it; when its
+    precise signals contradict each other, the copy gets no DigitalSourceType; otherwise it keeps the XMP's."""
     kept = iptc_fields(blobs)
-    _, signals = c2pa_marking(original)
-    deciding = {s["value"] for s in signals if s["grade"] == "precise"}
-    if len(deciding) == 1:
-        code = deciding.pop()
+    _, c2pa_signals = c2pa_marking(original)
+    signals = c2pa_signals + xmp_signals(blobs)
+    settled, settled_by = settle(signals)
+    if settled:
+        code = settled_by[0]["value"]
         if source_type_code(kept.get("DigitalSourceType", "")) != code:
             kept["DigitalSourceType"] = IPTC_SOURCE_URI + code
-    return {field: kept[field] for field in KEPT_IPTC_FIELDS if field in kept}
+    elif any(s.get("conflict") for s in signals):
+        kept.pop("DigitalSourceType", None)
+    return {field: kept[field] for field in KEPT_IPTC_FIELDS if field in kept}, bool(c2pa_signals)
 
 
 def xmp_for_copy(kept: dict) -> bytes:

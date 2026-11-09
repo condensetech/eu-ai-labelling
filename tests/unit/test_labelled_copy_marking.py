@@ -9,12 +9,17 @@ longer matches. Each copy is read back with `marking`, as the skill reads it.
 
 from __future__ import annotations
 
+import json
+import shutil
 import struct
+import subprocess
 
 import pytest
 
+from helpers import LABEL_TOOL
 from markings import (
-    IPTC_SOURCE, XMP_UUID, jpeg, manifest, png, signed, webp, with_mp4_xmp, with_quicktime_xmp, xmp_packet,
+    IPTC_SOURCE, XMP_UUID, jpeg, manifest, png, signed, tampered, webp, with_mp4_xmp, with_quicktime_xmp,
+    xmp_packet,
 )
 from videos import flat_mp4, needs_ffmpeg, real_tools
 
@@ -137,6 +142,79 @@ def test_an_xmp_without_iptc_fields_is_not_carried(tmp_path, label_tool):
     assert b"xmpmeta" not in copy.read_bytes()
 
 
+def test_an_original_whose_xmp_contradicts_itself_gives_a_copy_that_settles_nothing(tmp_path, label_tool):
+    xmp = xmp_packet("trainedAlgorithmicMedia", ai=AI_FIELDS) + xmp_packet("compositeWithTrainedAlgorithmicMedia")
+    original = png(tmp_path / "photo.png", xmp=xmp, size=SIZE)
+    assert marking(label_tool, original)["settled"] is None
+
+    report, copy = apply(label_tool, original)
+
+    assert marking(label_tool, copy)["settled"] is None
+    assert "DigitalSourceType" not in report["marking_kept"]
+    assert report["marking_kept"]["AISystemUsed"] == AI_FIELDS["AISystemUsed"]
+    assert b"DigitalSourceType" not in copy.read_bytes()
+
+
+def test_a_c2pa_manifest_that_contradicts_itself_gives_a_copy_that_settles_nothing(tmp_path, label_tool):
+    unsigned = png(tmp_path / "unsigned.png", xmp=xmp_packet("trainedAlgorithmicMedia"), size=SIZE)
+    original = signed(unsigned, tmp_path / "photo.png",
+                      manifest("trainedAlgorithmicMedia", "compositeWithTrainedAlgorithmicMedia"))
+    assert marking(label_tool, original)["settled"] is None
+
+    report, copy = apply(label_tool, original)
+
+    assert marking(label_tool, copy)["settled"] is None
+    assert "marking_kept" not in report
+    assert report["c2pa_left_behind"] is True
+
+
+def test_the_copy_keeps_the_digital_source_type_that_settles_not_the_first_one_written(tmp_path, label_tool):
+    xmp = xmp_packet("algorithmicMedia") + xmp_packet("trainedAlgorithmicMedia")
+    original = png(tmp_path / "photo.png", xmp=xmp, size=SIZE)
+    assert marking(label_tool, original)["settled"] == "generated"
+
+    report, copy = apply(label_tool, original)
+
+    assert marking(label_tool, copy)["settled"] == "generated"
+    assert report["marking_kept"]["DigitalSourceType"] == IPTC_SOURCE + "trainedAlgorithmicMedia"
+
+
+@pytest.mark.parametrize("make", [
+    lambda base, to: signed(base, to, manifest("trainedAlgorithmicMedia")),
+    lambda base, to: tampered(signed(base, to, manifest("trainedAlgorithmicMedia"))),
+], ids=["precise", "invalid signature"])
+def test_the_report_says_when_a_c2pa_marking_is_left_behind(tmp_path, label_tool, make):
+    original = make(png(tmp_path / "unsigned.png", size=SIZE), tmp_path / "photo.png")
+    assert marking(label_tool, original)["signals"]
+
+    report, copy = apply(label_tool, original)
+
+    assert report["c2pa_left_behind"] is True
+    assert b"c2pa" not in copy.read_bytes()
+
+
+def test_an_original_without_c2pa_leaves_none_behind(tmp_path, label_tool):
+    original = png(tmp_path / "photo.png", xmp=xmp_packet("trainedAlgorithmicMedia"), size=SIZE)
+
+    report, _ = apply(label_tool, original)
+
+    assert "c2pa_left_behind" not in report
+
+
+@pytest.mark.skipif(shutil.which("uv") is None, reason="uv not installed")
+def test_marking_kept_is_what_the_copy_carries_even_where_pillow_cannot_write_it(tmp_path):
+    """Pillow 10, which the python3 fallback may have, ignores the `xmp` option of a JPEG save."""
+    original = jpeg(tmp_path / "photo.jpg", xmp=full_xmp("trainedAlgorithmicMedia"), size=SIZE)
+    proc = subprocess.run(["uv", "run", "--quiet", "--no-project", "--with", "pillow==10.4.0", "--with", "resvg-py",
+                           "python", str(LABEL_TOOL), "apply", str(original), "--variant", "generated"],
+                          capture_output=True, text=True, timeout=600)
+    assert proc.returncode == 0, proc.stderr
+    copy = tmp_path / "photo.ai-label.jpg"
+
+    assert b"xmpmeta" not in copy.read_bytes(), "Pillow 10 wrote no XMP"
+    assert "marking_kept" not in json.loads(proc.stdout)
+
+
 # --- Videos ------------------------------------------------------------------------
 
 
@@ -234,8 +312,9 @@ def test_a_c2pa_marked_mp4s_copy_keeps_the_source_type_but_not_the_manifest(tmp_
     env = real_tools(tmp_path / "bin")
     assert marking(label_tool, video, env)["settled"] == "generated"
 
-    _, copy = video_apply(label_tool, tmp_path, video)
+    report, copy = video_apply(label_tool, tmp_path, video)
 
+    assert report["c2pa_left_behind"] is True
     read = marking(label_tool, copy, env)
     assert read["settled"] == "generated"
     assert [s["source"] for s in read["signals"]] == ["xmp"]
