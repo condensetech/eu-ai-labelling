@@ -293,7 +293,7 @@ Run the tests:
 uv run pytest
 ```
 
-GitHub Actions runs the same suite on every push and pull request, without the tests marked `model` or `claude_cli` (`.github/workflows/tests.yml`).
+GitHub Actions runs the same suite on every push and pull request, without the tests marked `model` or `claude_cli` (`.github/workflows/tests.yml`). A second job runs the `skills` CLI against the checkout and fails unless `eu-ai-labelling` is the only skill it lists.
 
 The README previews in `docs/previews/` are made by the plugin itself, from illustrations drawn by a script. Regenerate them (needs FFmpeg and Google Chrome) with:
 
