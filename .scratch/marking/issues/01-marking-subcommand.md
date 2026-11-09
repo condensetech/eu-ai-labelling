@@ -4,7 +4,7 @@
 
 **Blocked by:** none
 
-**Status:** ready-for-agent
+**Status:** resolved
 
 - [x] `c2pa-python` added to the script's inline dependencies. Under the `python3` fallback without it, the subcommand still runs and reports `c2pa: unavailable`.
 - [x] Reads IPTC DigitalSourceType from XMP in PNG, JPEG, WebP, MP4 and MOV.

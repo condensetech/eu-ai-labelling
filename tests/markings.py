@@ -62,6 +62,21 @@ def png(path: Path, xmp: bytes | None = None, text: dict | None = None, compress
     return path
 
 
+def png_after_idat(path: Path, key: str, value: str, itxt: bool = False) -> Path:
+    """A PNG whose `key` text chunk (iTXt when `itxt`, else tEXt) sits after IDAT, just before IEND, where
+    the PNG specification allows it."""
+    import zlib
+
+    picture().save(path, "PNG")
+    data = path.read_bytes()
+    text = key.encode("latin-1") + b"\x00"
+    body = (b"iTXt" + text + b"\x00\x00\x00\x00" + value.encode()) if itxt else (b"tEXt" + text + value.encode("latin-1"))
+    chunk = struct.pack(">I", len(body) - 4) + body + struct.pack(">I", zlib.crc32(body))
+    at = data.rindex(b"IEND") - 4
+    path.write_bytes(data[:at] + chunk + data[at:])
+    return path
+
+
 def jpeg(path: Path, xmp: bytes | None = None, software: str | None = None) -> Path:
     """A JPEG with `xmp` in its APP1 XMP segment and `software` as EXIF Software (0x0131)."""
     exif = Image.Exif()

@@ -17,7 +17,7 @@ import pytest
 
 from helpers import LABEL_TOOL
 from markings import (
-    jpeg, manifest, png, remote_only, signed, tampered, webp, with_mp4_xmp, with_quicktime_xmp, xmp_packet,
+    jpeg, manifest, png, png_after_idat, remote_only, signed, tampered, webp, with_mp4_xmp, with_quicktime_xmp, xmp_packet,
 )
 from videos import flat_mp4, needs_ffmpeg, real_tools, without_tools
 
@@ -250,6 +250,35 @@ def test_a_generator_text_chunk_is_vague_and_quoted(tmp_path, label_tool, key, v
     assert report["settled"] is None
     assert report["quotes"] == [signal["quote"]]
     assert key in signal["quote"]
+
+
+def test_a_generator_text_chunk_after_the_image_data_is_read(tmp_path, label_tool):
+    report = marking(label_tool, png_after_idat(tmp_path / "a.png", "parameters", "a lighthouse, Steps: 20"))
+
+    assert only(report["signals"], source="png_text")["field"] == "parameters"
+
+
+def test_xmp_after_the_image_data_is_read(tmp_path, label_tool):
+    marked = png_after_idat(tmp_path / "a.png", "XML:com.adobe.xmp",
+                            xmp_packet("trainedAlgorithmicMedia").decode(), itxt=True)
+
+    report = marking(label_tool, marked)
+
+    assert report["settled"] == "generated"
+
+
+@pytest.mark.parametrize("software", ["DALL·E 3", "DALL-E", "dalle3", "OpenAI DALL.E 2"])
+def test_dall_e_is_named(tmp_path, label_tool, software):
+    report = marking(label_tool, png(tmp_path / "a.png", xmp=xmp_packet(creator_tool=software)))
+
+    assert only(report["signals"], source="software")["tool"] == "DALL-E"
+
+
+@pytest.mark.parametrize("software", ["Photo by Randall Edwards", "Kendall E. camera", "Dall Edwards"])
+def test_a_name_that_only_contains_dall_e_is_ignored(tmp_path, label_tool, software):
+    report = marking(label_tool, png(tmp_path / "a.png", xmp=xmp_packet(creator_tool=software)))
+
+    assert report["signals"] == []
 
 
 def test_a_long_text_chunk_is_shortened_in_the_quote(tmp_path, label_tool):

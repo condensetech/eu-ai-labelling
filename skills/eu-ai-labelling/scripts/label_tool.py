@@ -3108,7 +3108,7 @@ AI_TOOLS = {
     "InvokeAI": r"invoke[ -]?ai",
     "Fooocus": r"fooocus",
     "Midjourney": r"midjourney",
-    "DALL-E": r"dall[-·. ]?e",
+    "DALL-E": r"\bdall[-·. ]?e(?![a-z])",
     "ChatGPT": r"chatgpt|\bgpt[- ]?(?:4o|image)",
     "Sora": r"\bsora\b",
     "Adobe Firefly": r"firefly",
@@ -3255,6 +3255,11 @@ def image_marking(path: Path) -> list[dict]:
             raise svg_refusal(path)
         raise LabelToolError("unreadable_image", f"Cannot read {path} as an image: {exc}")
     with image:
+        if image.format == "PNG":
+            try:
+                image.load()  # Pillow reads the text and XMP chunks after IDAT only once the image is loaded
+            except Exception:  # truncated image data: keep the chunks read before it
+                pass
         info = dict(image.info)
         blobs = [v if isinstance(v, bytes) else as_text(v).encode()
                  for k, v in info.items() if k in ("xmp", "XML:com.adobe.xmp")]
