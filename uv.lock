@@ -431,7 +431,7 @@ dev = [
 dev = [
     { name = "c2pa-python", specifier = ">=0.38,<0.39" },
     { name = "cryptography", specifier = ">=42" },
-    { name = "pillow", specifier = ">=10" },
+    { name = "pillow", specifier = ">=11" },
     { name = "pytest", specifier = ">=8" },
     { name = "resvg-py", specifier = ">=0.5" },
 ]

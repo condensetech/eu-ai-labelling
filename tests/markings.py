@@ -24,10 +24,19 @@ XMP_UUID = bytes.fromhex("BE7ACFCB97A942E89C71999491E3AFAC")
 
 
 def xmp_packet(source_type: str | None = None, creator_tool: str | None = None, software: str | None = None,
-               element: bool = False) -> bytes:
+               element: bool = False, ai: dict | None = None, instance_id: str | None = None,
+               provenance: str | None = None) -> bytes:
     """An XMP packet. `source_type` is an IPTC code (`trainedAlgorithmicMedia`), written as the full URI;
-    `element` writes it as an element with rdf:resource rather than as an attribute."""
+    `element` writes it as an element with rdf:resource rather than as an attribute. `ai` holds IPTC AI
+    fields by name (`AISystemUsed`, ...); `instance_id` is an xmpMM:InstanceID and `provenance` a
+    dcterms:provenance, neither of which a Labelled Copy may inherit."""
     attributes, elements = [], []
+    for name, value in (ai or {}).items():
+        elements.append(f"<Iptc4xmpExt:{name}>{value}</Iptc4xmpExt:{name}>")
+    if instance_id:
+        attributes.append(f'xmpMM:InstanceID="{instance_id}"')
+    if provenance:
+        attributes.append(f'dcterms:provenance="{provenance}"')
     if source_type and element:
         elements.append(f'<Iptc4xmpExt:DigitalSourceType rdf:resource="{IPTC_SOURCE}{source_type}"/>')
     elif source_type:
@@ -41,6 +50,7 @@ def xmp_packet(source_type: str | None = None, creator_tool: str | None = None, 
         '<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">'
         '<rdf:Description rdf:about="" xmlns:Iptc4xmpExt="http://iptc.org/std/Iptc4xmpExt/2008-02-29/" '
         'xmlns:xmp="http://ns.adobe.com/xap/1.0/" xmlns:tiff="http://ns.adobe.com/tiff/1.0/" '
+        'xmlns:xmpMM="http://ns.adobe.com/xap/1.0/mm/" xmlns:dcterms="http://purl.org/dc/terms/" '
         + " ".join(attributes) + ">" + "".join(elements) +
         "</rdf:Description></rdf:RDF></x:xmpmeta>"
         '<?xpacket end="w"?>'
@@ -51,14 +61,15 @@ def picture(size=(64, 48)) -> Image.Image:
     return Image.new("RGB", size, BACKGROUND)
 
 
-def png(path: Path, xmp: bytes | None = None, text: dict | None = None, compressed: bool = False) -> Path:
+def png(path: Path, xmp: bytes | None = None, text: dict | None = None, compressed: bool = False,
+        size=(64, 48)) -> Path:
     """A PNG with `xmp` in an iTXt chunk and each `text` key/value in a tEXt chunk (zTXt when `compressed`)."""
     info = PngInfo()
     if xmp is not None:
         info.add_itxt("XML:com.adobe.xmp", xmp.decode(), zip=compressed)
     for key, value in (text or {}).items():
         info.add_text(key, value, zip=compressed)
-    picture().save(path, "PNG", pnginfo=info)
+    picture(size).save(path, "PNG", pnginfo=info)
     return path
 
 
@@ -77,12 +88,12 @@ def png_after_idat(path: Path, key: str, value: str, itxt: bool = False) -> Path
     return path
 
 
-def jpeg(path: Path, xmp: bytes | None = None, software: str | None = None) -> Path:
+def jpeg(path: Path, xmp: bytes | None = None, software: str | None = None, size=(64, 48)) -> Path:
     """A JPEG with `xmp` in its APP1 XMP segment and `software` as EXIF Software (0x0131)."""
     exif = Image.Exif()
     if software:
         exif[0x0131] = software
-    image = picture()
+    image = picture(size)
     image.save(path, "JPEG", exif=exif.tobytes())
     if xmp is not None:
         data = path.read_bytes()
@@ -92,8 +103,8 @@ def jpeg(path: Path, xmp: bytes | None = None, software: str | None = None) -> P
     return path
 
 
-def webp(path: Path, xmp: bytes) -> Path:
-    picture().save(path, "WEBP", xmp=xmp)
+def webp(path: Path, xmp: bytes | None = None, size=(64, 48)) -> Path:
+    picture(size).save(path, "WEBP", **({"xmp": xmp} if xmp is not None else {}))
     return path
 
 

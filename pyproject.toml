@@ -8,7 +8,7 @@ dependencies = []
 
 [dependency-groups]
 # c2pa-python and cryptography build the signed C2PA fixtures of the marking tests.
-dev = ["pytest>=8", "pillow>=10", "resvg-py>=0.5", "c2pa-python>=0.38,<0.39", "cryptography>=42"]
+dev = ["pytest>=8", "pillow>=11", "resvg-py>=0.5", "c2pa-python>=0.38,<0.39", "cryptography>=42"]
 
 [tool.uv]
 package = false

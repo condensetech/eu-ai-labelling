@@ -2,7 +2,7 @@
 # /// script
 # requires-python = ">=3.10"
 # dependencies = [
-#     "pillow>=10",
+#     "pillow>=11",
 #     "resvg-py>=0.5",
 #     "c2pa-python>=0.38,<0.39",
 # ]
@@ -35,7 +35,17 @@ Subcommands:
       EU Icon burned in. The original file is never modified. Accepts still
       PNG, JPEG (including camera MPO JPEGs, labelled as their main image) and
       WebP; keeps greyscale and CMYK in their colour space, the ICC profile and
-      EXIF; re-encodes JPEG at quality 95.
+      EXIF; re-encodes JPEG at quality 95. Keeps the original's IPTC Marking
+      (see `marking_kept` below).
+
+`apply` and `video-apply` (MP4, MOV) write into the copy's XMP the original's
+IPTC DigitalSourceType and IPTC AI fields (AISystemUsed, AISystemVersionUsed,
+AIPromptInformation, AIPromptWriterName), unchanged, and print them as
+`marking_kept`; with no such field the copy gets no XMP and no `marking_kept`.
+The DigitalSourceType comes from the original's XMP, or from its active C2PA
+manifest when that one settles the Icon Variant (see `marking`). Nothing else
+of the original's XMP is kept (no xmpMM:InstanceID, no dcterms:provenance), nor
+its C2PA manifest, whose hard binding the copy no longer matches.
 
 Both subcommands refuse animated images (`animated_image`), SVG
 (`svg_image`) and any other format, such as BMP, TIFF or a still GIF
@@ -801,6 +811,9 @@ def cmd_apply(args: argparse.Namespace) -> dict:
     overlay.alpha_composite(icon, (x, y))
     labelled = burn_in(source, overlay)
     metadata = matching_profile_only(metadata, labelled.mode)
+    kept = kept_marking(original, image_xmp(original))
+    if kept:
+        metadata.update(xmp_options(image_format, xmp_for_copy(kept)))
     # An existing copy that is a link to the original (or anything else) is
     # replaced, never written through, and a failed write leaves it as it was.
     try:
@@ -823,6 +836,8 @@ def cmd_apply(args: argparse.Namespace) -> dict:
     }
     if plate_box:
         result["plate_box"] = plate_box
+    if kept:
+        result["marking_kept"] = kept
     return result
 
 
@@ -2869,6 +2884,8 @@ def cmd_video_apply(args: argparse.Namespace) -> dict:
     original, tools, info, path = plan["original"], plan["tools"], plan["info"], plan["path"]
     video, display, duration, visibility = info["video"], plan["display"], plan["duration"], plan["visibility"]
     target = labelled_copy_path(original)
+    # ffmpeg's -map_metadata carries no XMP (measured with FFmpeg 9): it is written after encoding.
+    kept = kept_marking(original, video_xmp(original)) if path["muxer"] in VIDEO_XMP_MUXERS else {}
     with tempfile.TemporaryDirectory(prefix="eu-ai-labelling-") as work:
         work = Path(work)
         label = draw_label(args, plan, work)
@@ -2882,6 +2899,8 @@ def cmd_video_apply(args: argparse.Namespace) -> dict:
                                          f"ffmpeg could not render {target.name}: "
                                          f"{stderr_tail(proc.stderr, 3, 'no output')}. "
                                          "The original and any previous Labelled Copy are unchanged.")
+                if kept:
+                    write_video_xmp(staged, xmp_for_copy(kept), path["muxer"])
                 visible_at, hidden_at = label_check_times(visibility, info)
                 checks = validate_output(tools, info, staged, box, visible_at, work, hidden_at, hdr=label["hdr"])
                 failed = [c for c in checks if not c["passed"]]
@@ -2910,6 +2929,7 @@ def cmd_video_apply(args: argparse.Namespace) -> dict:
             **({"hdr": hdr_report(path, label["hdr"]["metadata"])} if label["hdr"] else {}),
         },
         "validation": {"passed": True, "checks": checks},
+        **({"marking_kept": kept} if kept else {}),
     }
 
 
@@ -3244,6 +3264,13 @@ def as_text(value) -> str:
     return value.decode("utf-8", "replace") if isinstance(value, bytes) else str(value)
 
 
+def xmp_blobs(image) -> list[bytes]:
+    """The blobs of an opened (and, for a PNG, loaded) image that may hold its XMP."""
+    blobs = [v if isinstance(v, bytes) else as_text(v).encode()
+             for k, v in image.info.items() if k in ("xmp", "XML:com.adobe.xmp")]
+    return blobs + [data for marker, data in getattr(image, "applist", []) if marker == "APP1"]
+
+
 def image_marking(path: Path) -> list[dict]:
     """XMP, EXIF Software and the generator PNG text chunks of an image."""
     from PIL import Image
@@ -3261,10 +3288,7 @@ def image_marking(path: Path) -> list[dict]:
             except Exception:  # truncated image data: keep the chunks read before it
                 pass
         info = dict(image.info)
-        blobs = [v if isinstance(v, bytes) else as_text(v).encode()
-                 for k, v in info.items() if k in ("xmp", "XML:com.adobe.xmp")]
-        blobs += [data for marker, data in getattr(image, "applist", []) if marker == "APP1"]
-        signals = xmp_signals(blobs)
+        signals = xmp_signals(xmp_blobs(image))
         try:
             software = image.getexif().get(EXIF_SOFTWARE)
         except Exception:  # a broken EXIF block is no Marking
@@ -3463,6 +3487,117 @@ def cmd_marking(args: argparse.Namespace) -> dict:
         "settled_by": [s["quote"] for s in settled_by],
         "quotes": [] if settled else [s["quote"] for s in signals if s["grade"] == "vague"],
     }
+
+
+# --- The Marking a Labelled Copy keeps ----------------------------------------------
+
+# The original's IPTC DigitalSourceType and the IPTC AI fields (IPTC Photo Metadata 2025.1), kept unchanged:
+# adding a Label doesn't change what the content is. Nothing else of its XMP is kept: its xmpMM:InstanceID
+# would misidentify the copy, and its dcterms:provenance points at a manifest whose hard binding the copy fails.
+KEPT_IPTC_FIELDS = ("DigitalSourceType", "AISystemUsed", "AISystemVersionUsed", "AIPromptInformation",
+                    "AIPromptWriterName")
+IPTC_SOURCE_URI = "http://cv.iptc.org/newscodes/digitalsourcetype/"
+VIDEO_XMP_MUXERS = ("mp4", "mov")
+
+
+def iptc_fields(blobs: list[bytes]) -> dict:
+    """The first plain value of each KEPT_IPTC_FIELDS in the XMP packets of `blobs`, as written."""
+    found = {}
+    for blob in blobs:
+        for packet in xmp_packets(blob):
+            tree = parse_xmp(packet)
+            if tree is None:
+                continue
+            for element in tree.iter():
+                values = list(element.attrib.items())
+                if len(element) == 0:  # a structure (rdf:Alt, rdf:Bag) is not a plain value
+                    values.append((element.tag, element.get(NS_RDF + "resource") or element.text or ""))
+                for name, value in values:
+                    field = name[len(NS_IPTC_EXT):] if name.startswith(NS_IPTC_EXT) else None
+                    if field in KEPT_IPTC_FIELDS and value.strip():
+                        found.setdefault(field, value.strip())
+    return found
+
+
+def image_xmp(path: Path) -> list[bytes]:
+    from PIL import Image
+
+    with Image.open(path) as image:
+        image.load()  # a PNG's chunks after IDAT are read only once the image is loaded
+        return xmp_blobs(image)
+
+
+def kept_marking(original: Path, blobs: list[bytes]) -> dict:
+    """The IPTC fields the Labelled Copy of `original` keeps. The DigitalSourceType is the XMP's, unless the
+    active C2PA manifest settles the Icon Variant with another one: then it is the manifest's, so that the
+    copy settles the variant the original settles."""
+    kept = iptc_fields(blobs)
+    _, signals = c2pa_marking(original)
+    deciding = {s["value"] for s in signals if s["grade"] == "precise"}
+    if len(deciding) == 1:
+        code = deciding.pop()
+        if source_type_code(kept.get("DigitalSourceType", "")) != code:
+            kept["DigitalSourceType"] = IPTC_SOURCE_URI + code
+    return {field: kept[field] for field in KEPT_IPTC_FIELDS if field in kept}
+
+
+def xmp_for_copy(kept: dict) -> bytes:
+    """A fresh XMP packet holding only the `kept` IPTC fields."""
+    from xml.sax.saxutils import escape
+
+    fields = "".join(f"<Iptc4xmpExt:{name}>{escape(value)}</Iptc4xmpExt:{name}>" for name, value in kept.items())
+    return ('<?xpacket begin="﻿" id="W5M0MpCehiHzreSzNTczkc9d"?>'
+            '<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">'
+            f'<rdf:Description rdf:about="" xmlns:Iptc4xmpExt="{NS_IPTC_EXT[1:-1]}">{fields}</rdf:Description>'
+            '</rdf:RDF></x:xmpmeta><?xpacket end="w"?>').encode()
+
+
+def xmp_options(image_format: str, packet: bytes) -> dict:
+    """Pillow `save()` options writing `packet` as the image's XMP."""
+    if image_format == "PNG":
+        from PIL.PngImagePlugin import PngInfo
+
+        info = PngInfo()
+        info.add_itxt("XML:com.adobe.xmp", packet.decode())
+        return {"pnginfo": info}
+    return {"xmp": packet}  # JPEG (Pillow 11 and later) and WebP
+
+
+def iso_box(kind: bytes, payload: bytes) -> bytes:
+    return (8 + len(payload)).to_bytes(4, "big") + kind + payload
+
+
+def write_video_xmp(path: Path, packet: bytes, muxer: str) -> None:
+    """Write `packet` as the video's XMP where Adobe's XMP specification (part 3) puts it: `moov/udta/XMP_`
+    for QuickTime, a top-level `uuid` box for MP4. ffmpeg writes `moov` last, so growing it moves no sample;
+    a QuickTime file laid out otherwise gets the `uuid` box too, which `marking` also reads."""
+    size = path.stat().st_size
+    with path.open("r+b") as handle:
+        def read(at: int, length: int) -> bytes:
+            handle.seek(at)
+            return handle.read(length)
+
+        last = None
+        for last in iso_boxes(read, 0, size):
+            pass
+        if muxer == "mov" and last and last[0] == b"moov" and last[2] == size \
+                and int.from_bytes(read(last[1] - 8, 4), "big") == size - last[1] + 8 \
+                and size - last[1] <= BOX_READ_MAX_BYTES:
+            start = last[1]
+            moov = read(start, size - start)
+            inside = lambda at, length: moov[at:at + length]  # noqa: E731
+            udta = next(((s, e) for kind, s, e in iso_boxes(inside, 0, len(moov)) if kind == b"udta"), None)
+            item = iso_box(b"XMP_", packet)
+            if udta and int.from_bytes(moov[udta[0] - 8:udta[0] - 4], "big") == udta[1] - udta[0] + 8:
+                moov = moov[:udta[0] - 8] + iso_box(b"udta", moov[udta[0]:udta[1]] + item) + moov[udta[1]:]
+            else:
+                moov += iso_box(b"udta", item)
+            handle.seek(start - 8)
+            handle.write(iso_box(b"moov", moov))
+            handle.truncate()
+            return
+        handle.seek(size)
+        handle.write(iso_box(b"uuid", MP4_XMP_UUID + packet))
 
 
 class JsonArgumentParser(argparse.ArgumentParser):
