@@ -121,6 +121,13 @@ def test_the_batch_report_lists_the_files_settled_by_marking():
     assert "SKILL.md **A Marking**" in report
 
 
+def test_the_batch_report_says_when_a_marking_agrees_with_the_users_word():
+    report = step(reference("batch.md"), "Report the batch")
+    settled = report.split("**Settled by Marking:**", 1)[1].split("\n   - **", 1)[0]
+    assert "contradicts the user's word" in settled
+    assert "agrees with the user's word" in settled and "one line" in settled
+
+
 def test_the_image_preview_and_report_name_the_marking():
     image = reference("image.md")
     assert "SKILL.md **A Marking**" in step(image, "Show a preview")
