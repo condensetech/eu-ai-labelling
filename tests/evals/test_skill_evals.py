@@ -400,9 +400,14 @@ def sentences(text: str) -> list[str]:
     return [p.strip() for p in re.split(r"\n|(?<=[.!?])\s+", text) if p.strip()]
 
 
+# A question put over the list of its options: "Should I:", "Do you want me to:".
+LIST_QUESTION = re.compile(r"^(?:should|shall|do you want|would you like|which|what)\b.*:$")
+
+
 def questions(text: str) -> list[str]:
-    """The questions in the normalised reply: each line or sentence ending in `?`."""
-    return [p for p in sentences(text) if p.rstrip(" )\"'").endswith("?")]
+    """The questions in the normalised reply: each line or sentence ending in `?`,
+    and each one put over a list of its options."""
+    return [p for p in sentences(text) if p.rstrip(" )\"'").endswith("?") or LIST_QUESTION.match(p)]
 
 
 def list_items(text: str) -> list[str]:
@@ -492,8 +497,16 @@ def check_batch_questions(spec: dict, text: str, reply: str) -> None:
     """The batch questions asked only about the files that differ."""
     asked = questions(text)
     assert asked, f"no question asked:\n{reply}"
-    # A file may be named in a lead-in on the question's line ("**recap.mp4.** Did AI ...?").
-    asked_lines = [line for line in text.splitlines() if any(q in line for q in asked)]
+    # A file may be named in a lead-in on the question's line ("**recap.mp4.** Did AI ...?")
+    # or in a heading right above it ("**Question about recap.mp4**").
+    lines = [line for line in text.splitlines() if line.strip()]
+    asked_lines = []
+    for i, line in enumerate(lines):
+        if any(q in line for q in asked):
+            asked_lines.append(line)
+            heading = lines[i - 1].strip() if i else ""
+            if heading.startswith("#") or (heading and len(heading) < 80 and not re.search(r"[.?!:,;]$", heading)):
+                asked_lines.append(heading)
     for name in spec["about"]:
         assert any(name.lower() in q for q in asked + asked_lines), f"no question names {name}:\n{reply}"
     for name in spec["not_about"]:
@@ -1239,6 +1252,17 @@ def test_check_accepts_asking_about_an_existing_label(tmp_path, extra):
     check(scenario, project, digests, ASKS_ABOUT_EXISTING_LABEL_REPLY + extra)
 
 
+def test_check_accepts_an_existing_label_question_put_over_a_list(tmp_path):
+    scenario = load_scenario("existing-label-markdown-disclaimer")
+    project, digests = checked_project(tmp_path, scenario)
+    reply = ASKS_ABOUT_EXISTING_LABEL_REPLY.replace(
+        "Should I add the EU Icon anyway, or leave post.md as it is?",
+        "Should I:\n1. **Add the EU Icon anyway.**\n2. **Leave the document as it is.**",
+    )
+
+    check(scenario, project, digests, reply)
+
+
 @pytest.mark.parametrize("weakened", sorted(WEAKENED_EXISTING_LABEL_REPLIES))
 def test_check_rejects_a_weak_reply_on_an_existing_label(tmp_path, weakened):
     scenario = load_scenario("existing-label-markdown-disclaimer")
@@ -1535,7 +1559,9 @@ WEAKENED_BATCH_REPLIES = {
     ("", ""),
     ("1. Were crowd.png and stage.png generated from scratch",
      "**Question: crowd.png and stage.png.** Were they generated from scratch"),
-], ids=["named in the question", "named in the question's lead-in"])
+    ("1. Were crowd.png and stage.png generated from scratch",
+     "**Question about crowd.png and stage.png**\n\nWere they generated from scratch"),
+], ids=["named in the question", "named in the question's lead-in", "named in a heading above the question"])
 def test_check_accepts_a_batch_reply_asking_only_about_the_differing_files(tmp_path, old, new):
     scenario = load_scenario(BATCH_SCENARIO)
     project, digests = checked_project(tmp_path, scenario)
