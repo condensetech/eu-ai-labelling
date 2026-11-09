@@ -15,7 +15,7 @@ Every path in this skill and its reference files to `scripts/`, `assets/` or `re
 - `assets/icons/`: the official EU Icon SVGs, which label_tool renders and copies; `assets/icons/SOURCE.md` records where they came from.
 - `references/`: one procedure per content type, loaded only when that type is being labelled.
 
-Run the CLI with `uv run <skill folder>/scripts/label_tool.py <subcommand> ...`. When `uv` is missing, use `python3 <skill folder>/scripts/label_tool.py ...` provided Pillow and resvg-py are installed; if neither works, tell the user to install `uv`.
+Run the CLI with `uv run <skill folder>/scripts/label_tool.py <subcommand> ...`. When `uv` is missing, use `python3 <skill folder>/scripts/label_tool.py ...` provided Pillow and resvg-py are installed (without c2pa-python, `marking` skips C2PA and reports `c2pa: unavailable`); if neither works, tell the user to install `uv`.
 
 ## Steps
 

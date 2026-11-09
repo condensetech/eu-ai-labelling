@@ -69,7 +69,7 @@ npx skills add condensetech/eu-ai-labelling#v0.1.0
 
 ### Requirements
 
-- **Images:** [`uv`](https://docs.astral.sh/uv/), or Python 3.10+ with Pillow and resvg-py installed.
+- **Images:** [`uv`](https://docs.astral.sh/uv/), or Python 3.10+ with Pillow and resvg-py installed. Without c2pa-python, the agent doesn't check C2PA metadata when it reads a file's Marking.
 - **Videos:** also [FFmpeg](https://ffmpeg.org/download.html) (`ffmpeg` and `ffprobe`). The plugin doesn't install it: if it's missing, the agent gives you the install steps for your platform and checks again once you're done.
 - **Documents and sites:** nothing else.
 
