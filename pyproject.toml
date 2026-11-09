@@ -7,10 +7,17 @@ requires-python = ">=3.10"
 dependencies = []
 
 [dependency-groups]
-dev = ["pytest>=8", "pillow>=10", "resvg-py>=0.5"]
+# c2pa-python and cryptography build the signed C2PA fixtures of the marking tests.
+dev = ["pytest>=8", "pillow>=10", "resvg-py>=0.5", "c2pa-python>=0.38,<0.39", "cryptography>=42"]
 
 [tool.uv]
 package = false
+# Some c2pa-python releases ship wheels for only some platforms (0.38.2: macOS
+# only), so the lock must pick one with wheels for CI (Linux) and macOS.
+required-environments = [
+    "sys_platform == 'linux' and platform_machine == 'x86_64'",
+    "sys_platform == 'darwin'",
+]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

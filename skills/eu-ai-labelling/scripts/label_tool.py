@@ -4,6 +4,7 @@
 # dependencies = [
 #     "pillow>=10",
 #     "resvg-py>=0.5",
+#     "c2pa-python>=0.38,<0.39",
 # ]
 # ///
 """label_tool: deterministic helpers for the eu-ai-labelling skill.
@@ -83,6 +84,31 @@ lists a Labelled Copy under `skipped` instead.
       same below an image, worded for the image.
       `--dark` gives the White Icon Colour. Also prints the `label` used and
       its `language` and `language_from`.
+
+  marking <image | video>
+      Reads the Marking an image or video carries and grades it as evidence for
+      the Icon Variant. It never says whether a Label is required. Sources: IPTC
+      DigitalSourceType in XMP (PNG, JPEG, WebP, MP4, MOV); C2PA manifests (the
+      Provider: claim generator and signer, the actions, their
+      digitalSourceType and whether the signature validates, read offline: a
+      manifest kept only at a remote URL counts as none); an AI tool named in
+      EXIF/XMP Software or CreatorTool; the generator PNG text chunks
+      (`parameters`, `prompt`, `workflow`); and, for a video, the container
+      tags ffprobe reads (`encoder`, `comment`, `com.apple.quicktime.*`), which
+      need ffmpeg and ffprobe as `video-tools` checks. Prints `media`, `c2pa`
+      (`checked`; `unavailable` when c2pa-python is not installed, the other
+      sources still read; `unreadable`), `signals` (each with its `source`,
+      `field`, `value`, `grade` and `quote`, plus `variant` when precise),
+      `settled` (generated, modified or null), `settled_by` and `quotes` (what
+      the origin question quotes when nothing is settled).
+      Grades: `trainedAlgorithmicMedia` is precise for generated,
+      `compositeWithTrainedAlgorithmicMedia` for modified, from XMP or from the
+      active C2PA manifest when its signature validates. Other AI source types,
+      tool names, generator chunks and an invalid C2PA manifest are vague;
+      human-origin source types are ignored. A valid active C2PA manifest
+      decides a conflict; otherwise precise signals that disagree become vague
+      (`conflict`). A file without any Marking gives `settled: null` and no
+      signals.
 
   copy-icons --to DIR [--colour black|white|both]
       Copies the official Basic EU Icon SVGs into DIR byte for byte. Prints
@@ -3061,6 +3087,379 @@ def cmd_video_preview(args: argparse.Namespace) -> dict:
     }
 
 
+# --- marking: the Marking a Provider embedded, as evidence for the Icon Variant -------
+
+# IPTC DigitalSourceType codes (https://cv.iptc.org/newscodes/digitalsourcetype/). Two say which Icon
+# Variant applies; three say AI took part without saying how. Every other code (digitalCapture,
+# digitalArt, humanEdits, ...) is a human origin and is ignored, as if no Marking were found.
+PRECISE_SOURCE_TYPES = {"trainedAlgorithmicMedia": "generated", "compositeWithTrainedAlgorithmicMedia": "modified"}
+VAGUE_SOURCE_TYPES = {"algorithmicallyEnhanced", "compositeSynthetic", "algorithmicMedia"}
+VALID_C2PA_STATES = ("Valid", "Trusted")  # the signature validates; whether the signer is trusted is not judged
+# c2pa-python's Reader settings: never fetch a remote manifest or an OCSP response.
+C2PA_OFFLINE = {"verify": {"remote_manifest_fetch": False, "ocsp_fetch": False}}
+C2PA_ACTIONS_LABEL = re.compile(r"c2pa\.actions(?:\.v\d+)?(?:__\d+)?\Z")  # c2pa.actions.v2, c2pa.actions__1, ...
+
+# AI tools named in Software, CreatorTool, a C2PA claim generator or a container tag, the first match
+# winning. A name alone never says which Icon Variant applies, so a match is only ever vague.
+AI_TOOLS = {
+    "Stable Diffusion": r"stable[ -]?diffusion|\bsdxl\b",
+    "AUTOMATIC1111": r"automatic1111|\bA1111\b",
+    "ComfyUI": r"comfyui",
+    "InvokeAI": r"invoke[ -]?ai",
+    "Fooocus": r"fooocus",
+    "Midjourney": r"midjourney",
+    "DALL-E": r"dall[-·. ]?e",
+    "ChatGPT": r"chatgpt|\bgpt[- ]?(?:4o|image)",
+    "Sora": r"\bsora\b",
+    "Adobe Firefly": r"firefly",
+    "Imagen": r"\bimagen\b",
+    "Gemini": r"\bgemini\b",
+    "Veo": r"\bveo\b",
+    "Runway": r"\brunway(?:ml)?\b",
+    "Pika": r"\bpika\b",
+    "Kling": r"\bkling\b",
+    "Luma Dream Machine": r"dream machine|\bluma ai\b",
+    "Leonardo.Ai": r"leonardo\.?ai",
+    "Ideogram": r"ideogram",
+    "FLUX": r"\bflux\.1\b|black forest labs",
+    "NovelAI": r"novelai",
+    "Krea": r"\bkrea\b",
+    "Synthesia": r"synthesia",
+    "HeyGen": r"heygen",
+    "Grok": r"\bgrok\b",
+    "OpenAI": r"\bopenai\b",  # after its products, so that "OpenAI Sora" names Sora
+}
+GENERATOR_CHUNKS = ("parameters", "prompt", "workflow")  # PNG text chunks of AUTOMATIC1111 and ComfyUI
+VIDEO_TAGS = ("encoder", "comment")  # plus every com.apple.quicktime.* tag
+QUOTED_CHARS = 200  # a value is cut to this length in the report and in the quote
+XMP_START = re.compile(rb"<x:x[ma]pmeta\b")
+XMP_END = re.compile(rb"</x:x[ma]pmeta\s*>")
+XMP_MAX_BYTES = 4_000_000
+NS_IPTC_EXT = "{http://iptc.org/std/Iptc4xmpExt/2008-02-29/}"
+NS_RDF = "{http://www.w3.org/1999/02/22-rdf-syntax-ns#}"
+XMP_TOOL_FIELDS = {"{http://ns.adobe.com/xap/1.0/}CreatorTool": "XMP CreatorTool",
+                   "{http://ns.adobe.com/tiff/1.0/}Software": "XMP Software"}
+EXIF_SOFTWARE = 0x0131
+MP4_XMP_UUID = bytes.fromhex("BE7ACFCB97A942E89C71999491E3AFAC")  # Adobe XMP specification, part 3
+BOX_READ_MAX_BYTES = 64_000_000  # the most of a `moov` box read to find its XMP
+
+
+def shortened(value: str) -> str:
+    value = " ".join(str(value).split())
+    return value if len(value) <= QUOTED_CHARS else value[:QUOTED_CHARS - 1] + "…"
+
+
+def ai_tool(value: str) -> str | None:
+    """The AI tool `value` names, if any."""
+    for name, pattern in AI_TOOLS.items():
+        if re.search(pattern, value, re.IGNORECASE):
+            return name
+    return None
+
+
+def source_type_code(value: str) -> str:
+    """`trainedAlgorithmicMedia` from the full IPTC URI or from the bare code."""
+    return value.strip().rstrip("/").rsplit("/", 1)[-1]
+
+
+def graded_source_type(code: str, trusted: bool = True) -> dict | None:
+    """`grade` (and `variant` when precise) of an IPTC code, or None for a human origin. A precise code is
+    precise only when `trusted`: from XMP, or from a C2PA manifest whose signature validates."""
+    if code in PRECISE_SOURCE_TYPES:
+        return {"grade": "precise", "variant": PRECISE_SOURCE_TYPES[code]} if trusted else {"grade": "vague"}
+    if code in VAGUE_SOURCE_TYPES:
+        return {"grade": "vague"}
+    return None
+
+
+def tool_signal(source: str, field: str, value, label: str | None = None) -> dict | None:
+    """A vague signal when `value` names an AI tool."""
+    if not isinstance(value, str):
+        return None
+    tool = ai_tool(value)
+    if tool is None:
+        return None
+    value = shortened(value)
+    return {"source": source, "field": field, "value": value, "tool": tool, "grade": "vague",
+            "quote": f"{label or field}: {value}"}
+
+
+def xmp_packets(blob: bytes) -> list[bytes]:
+    """Each `<x:xmpmeta>` packet in `blob`."""
+    packets, at = [], 0
+    while (start := XMP_START.search(blob, at)) is not None:
+        end = XMP_END.search(blob, start.end())
+        if end is None:
+            break
+        packets.append(blob[start.start():end.end()])
+        at = end.end()
+    return packets
+
+
+def parse_xmp(packet: bytes):
+    """The packet's XML tree, or None. A packet declaring a DTD is refused, so no entity is ever expanded."""
+    import xml.etree.ElementTree as ET
+
+    if b"<!DOCTYPE" in packet or b"<!ENTITY" in packet or len(packet) > XMP_MAX_BYTES:
+        return None
+    try:
+        return ET.fromstring(packet)
+    except ET.ParseError:
+        return None
+
+
+def xmp_signals(blobs: list[bytes]) -> list[dict]:
+    """IPTC DigitalSourceType (source `xmp`) and AI tools in CreatorTool or tiff:Software (`software`)."""
+    signals, seen = [], set()
+    for blob in blobs:
+        for packet in xmp_packets(blob):
+            tree = parse_xmp(packet)
+            if tree is None:
+                continue
+            for element in tree.iter():
+                values = list(element.attrib.items())
+                text = (element.text or "").strip()
+                if text:
+                    values.append((element.tag, text))
+                if element.tag == NS_IPTC_EXT + "DigitalSourceType" and element.get(NS_RDF + "resource"):
+                    values.append((element.tag, element.get(NS_RDF + "resource")))
+                for name, value in values:
+                    if (name, value) in seen:
+                        continue
+                    seen.add((name, value))
+                    if name == NS_IPTC_EXT + "DigitalSourceType":
+                        code = source_type_code(value)
+                        graded = graded_source_type(code)
+                        if graded:
+                            signals.append({"source": "xmp", "field": "DigitalSourceType", "value": code, **graded,
+                                            "quote": f"XMP DigitalSourceType: {code}"})
+                    elif name in XMP_TOOL_FIELDS:
+                        signal = tool_signal("software", XMP_TOOL_FIELDS[name], value)
+                        if signal:
+                            signals.append(signal)
+    return signals
+
+
+def as_text(value) -> str:
+    return value.decode("utf-8", "replace") if isinstance(value, bytes) else str(value)
+
+
+def image_marking(path: Path) -> list[dict]:
+    """XMP, EXIF Software and the generator PNG text chunks of an image."""
+    from PIL import Image
+
+    try:
+        image = Image.open(path)
+    except Exception as exc:  # Pillow raises several types for unreadable files
+        if path.suffix.lower() in SVG_SUFFIXES or looks_like_svg(path):
+            raise svg_refusal(path)
+        raise LabelToolError("unreadable_image", f"Cannot read {path} as an image: {exc}")
+    with image:
+        info = dict(image.info)
+        blobs = [v if isinstance(v, bytes) else as_text(v).encode()
+                 for k, v in info.items() if k in ("xmp", "XML:com.adobe.xmp")]
+        blobs += [data for marker, data in getattr(image, "applist", []) if marker == "APP1"]
+        signals = xmp_signals(blobs)
+        try:
+            software = image.getexif().get(EXIF_SOFTWARE)
+        except Exception:  # a broken EXIF block is no Marking
+            software = None
+        if (signal := tool_signal("software", "EXIF Software", software)) is not None:
+            signals.append(signal)
+        if image.format == "PNG":
+            for key, value in info.items():
+                if not isinstance(key, str) or key in ("xmp", "XML:com.adobe.xmp"):
+                    continue
+                if key.lower() in GENERATOR_CHUNKS and as_text(value).strip():
+                    value = shortened(as_text(value))
+                    signals.append({"source": "png_text", "field": key, "value": value, "grade": "vague",
+                                    "quote": f'PNG text chunk "{key}": {value}'})
+                elif key.lower() == "software":
+                    if (signal := tool_signal("software", "PNG Software", as_text(value))) is not None:
+                        signals.append(signal)
+    return signals
+
+
+def iso_boxes(read, start: int, end: int):
+    """(type, payload start, payload end) of each ISO BMFF box between `start` and `end`."""
+    at = start
+    while at + 8 <= end:
+        header = read(at, 16)
+        if len(header) < 8:
+            return
+        size, kind = int.from_bytes(header[:4], "big"), header[4:8]
+        offset = 8
+        if size == 1:
+            if len(header) < 16:
+                return
+            size, offset = int.from_bytes(header[8:16], "big"), 16
+        elif size == 0:
+            size = end - at
+        if size < offset:
+            return
+        yield kind, at + offset, min(at + size, end)
+        at += size
+
+
+def video_xmp(path: Path) -> list[bytes]:
+    """The XMP packets of an MP4 (a top-level `uuid` box) or a QuickTime file (`moov/udta/XMP_`)."""
+    blobs = []
+    size = path.stat().st_size
+    with path.open("rb") as handle:
+        def read(at: int, length: int) -> bytes:
+            handle.seek(at)
+            return handle.read(length)
+
+        for kind, start, end in iso_boxes(read, 0, size):
+            if kind == b"uuid" and read(start, 16) == MP4_XMP_UUID and end - start <= XMP_MAX_BYTES:
+                blobs.append(read(start + 16, end - start - 16))
+            elif kind == b"moov" and end - start <= BOX_READ_MAX_BYTES:
+                moov = read(start, end - start)
+                inside = lambda at, length: moov[at:at + length]  # noqa: E731
+                for child, child_start, child_end in iso_boxes(inside, 0, len(moov)):
+                    if child == b"udta":
+                        for item, item_start, item_end in iso_boxes(inside, child_start, child_end):
+                            if item == b"XMP_":
+                                blobs.append(moov[item_start:item_end])
+                    elif child == b"uuid" and moov[child_start:child_start + 16] == MP4_XMP_UUID:
+                        blobs.append(moov[child_start + 16:child_end])
+    return blobs
+
+
+def video_marking(path: Path) -> list[dict]:
+    """The XMP and the container tags ffprobe reads (`encoder`, `comment`, `com.apple.quicktime.*`)."""
+    tools = require_video_tools()
+    proc = run_tool([tools["ffprobe"], "-v", "error", "-show_entries", "format_tags:stream_tags", "-of", "json",
+                     path], timeout=TOOL_TIMEOUT_S * 4)
+    try:
+        probed = json.loads(proc.stdout or "{}")
+    except json.JSONDecodeError:
+        probed = {}
+    if proc.returncode != 0:
+        raise LabelToolError("unreadable_video", f"Cannot read {path.name} as a video: "
+                                                 f"{stderr_tail(proc.stderr, fallback='no stream found')}")
+    signals = xmp_signals(video_xmp(path))
+    tag_sets = [probed.get("format", {}).get("tags") or {}] + [s.get("tags") or {} for s in probed.get("streams", [])]
+    seen = set()
+    for tags in tag_sets:
+        for key, value in tags.items():
+            name = key.lower()
+            if name in VIDEO_TAGS or name.startswith("com.apple.quicktime."):
+                signal = tool_signal("container_tags", name, value, label=f"container tag {name}")
+                if signal and (name, signal["value"]) not in seen:
+                    seen.add((name, signal["value"]))
+                    signals.append(signal)
+    return signals
+
+
+def c2pa_provider(manifest: dict) -> str | None:
+    info = manifest.get("claim_generator_info") or []
+    names = [i.get("name") for i in info if isinstance(i, dict) and i.get("name")]
+    return names[0] if names else manifest.get("claim_generator")
+
+
+def c2pa_signer(manifest: dict) -> str | None:
+    signature = manifest.get("signature_info") or {}
+    return signature.get("issuer") or signature.get("common_name")
+
+
+def c2pa_actions(manifest: dict) -> list[dict]:
+    actions = []
+    for assertion in manifest.get("assertions") or []:
+        if C2PA_ACTIONS_LABEL.match(str(assertion.get("label", ""))):
+            actions += [a for a in (assertion.get("data") or {}).get("actions") or [] if isinstance(a, dict)]
+    return actions
+
+
+def c2pa_marking(path: Path) -> tuple[str, list[dict]]:
+    """(`checked` | `unavailable` | `unreadable`, signals) from the file's embedded C2PA manifests, read
+    offline. A manifest kept only at a remote URL counts as none."""
+    try:
+        import c2pa
+    except Exception:  # not installed under the python3 fallback, or its native library won't load
+        return "unavailable", []
+    try:
+        with c2pa.Context(c2pa.Settings.from_dict(C2PA_OFFLINE)) as context, \
+                c2pa.Reader(str(path), context=context) as reader:
+            store = json.loads(reader.json())
+    except (c2pa.C2paError.ManifestNotFound, c2pa.C2paError.NotSupported, c2pa.C2paError.RemoteManifest):
+        return "checked", []
+    except c2pa.C2paError as exc:
+        if str(exc).startswith("Remote"):  # a remote-only manifest, never fetched
+            return "checked", []
+        return "unreadable", []
+    state = store.get("validation_state")
+    valid = state in VALID_C2PA_STATES
+    active_label = store.get("active_manifest")
+    signals = []
+    for label, manifest in (store.get("manifests") or {}).items():
+        active = label == active_label
+        provider, signer = c2pa_provider(manifest), c2pa_signer(manifest)
+        validity = "signature valid" if valid else f"signature {str(state or 'not validated').lower()}"
+        who = f"C2PA {'manifest' if active else 'ingredient manifest'} by {provider or 'an unnamed generator'}" + (
+            f", signed by {signer}" if signer else "") + f" ({validity})"
+        details = {"active": active, "provider": provider, "signer": signer, "validation_state": state}
+        found = False
+        for action in c2pa_actions(manifest):
+            if not action.get("digitalSourceType"):
+                continue
+            code = source_type_code(str(action["digitalSourceType"]))
+            # An ingredient's origin is not the origin of this file: it never settles the variant.
+            graded = graded_source_type(code, trusted=valid and active)
+            if graded:
+                found = True
+                signals.append({"source": "c2pa", "field": "digitalSourceType", "value": code,
+                                "action": action.get("action"), **details, **graded,
+                                "quote": f"{who}: {action.get('action')} with digitalSourceType {code}"})
+        if not found and active:
+            for field, value in (("claim generator", provider), ("signer", signer)):
+                tool = ai_tool(value) if isinstance(value, str) else None
+                if tool:
+                    signals.append({"source": "c2pa", "field": field, "value": shortened(value), "tool": tool,
+                                    **details, "grade": "vague", "quote": who})
+                    break
+    return "checked", signals
+
+
+def settle(signals: list[dict]) -> tuple[str | None, list[dict]]:
+    """The Icon Variant the signals settle, and the signals that settle it, after the conflict rules:
+    a valid active C2PA manifest decides; otherwise precise signals that disagree all become vague."""
+    precise = [s for s in signals if s["grade"] == "precise"]
+    deciding = [s for s in precise if s["source"] == "c2pa"]  # only the active manifest, when valid, is precise
+    if deciding and len({s["variant"] for s in deciding}) == 1:
+        variant = deciding[0]["variant"]
+        for signal in precise:
+            if signal["variant"] != variant:
+                signal["overridden"] = True
+        return variant, [s for s in precise if s["variant"] == variant]
+    if len({s["variant"] for s in precise}) == 1:
+        return precise[0]["variant"], precise
+    for signal in precise:
+        signal.update(grade="vague", conflict=True)
+        del signal["variant"]
+    return None, []
+
+
+def cmd_marking(args: argparse.Namespace) -> dict:
+    path = Path(args.file)
+    if not path.is_file():
+        raise LabelToolError("not_found", f"File not found: {path}")
+    media = media_of(path)
+    signals = video_marking(path) if media == "video" else image_marking(path)
+    c2pa_status, c2pa_signals = c2pa_marking(path)
+    signals = c2pa_signals + signals
+    settled, settled_by = settle(signals)
+    return {
+        "path": str(path),
+        "media": media,
+        "c2pa": c2pa_status,
+        "signals": signals,
+        "settled": settled,
+        "settled_by": [s["quote"] for s in settled_by],
+        "quotes": [] if settled else [s["quote"] for s in signals if s["grade"] == "vague"],
+    }
+
+
 class JsonArgumentParser(argparse.ArgumentParser):
     def error(self, message: str):  # report usage errors as JSON too
         raise LabelToolError("usage", message)
@@ -3171,6 +3570,12 @@ def build_parser() -> argparse.ArgumentParser:
     vpreview.add_argument("--frames", type=int, default=PREVIEW_FRAMES,
                           help="source frames to write, spread over the video (default: %(default)s)")
     vpreview.set_defaults(handler=cmd_video_preview)
+
+    marking_help = ("Read and grade the Marking (C2PA, XMP, generator metadata) an image or video carries, "
+                    "as evidence for the Icon Variant.")
+    mark = sub.add_parser("marking", help=marking_help, description=marking_help)
+    mark.add_argument("file", help="an image or a video")
+    mark.set_defaults(handler=cmd_marking)
 
     return parser
 

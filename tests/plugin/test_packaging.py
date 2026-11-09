@@ -201,6 +201,7 @@ def test_label_tool_declares_its_dependencies_inline():
     metadata = block.group(1).lower()
     assert "pillow" in metadata
     assert "resvg-py" in metadata
+    assert '"c2pa-python>=0.38,<0.39"' in metadata
 
 
 # --- The vendored EU Icons --------------------------------------------------
