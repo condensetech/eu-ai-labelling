@@ -21,6 +21,19 @@ project, the prompt to send and the behaviour expected back:
       }
     }
 
+An image or a video may carry a Marking, embedded offline when the project is
+written (tests/markings.py builds it; nothing is fetched):
+
+        "photo.png": {"image": [w, h],
+                      "marking": {"xmp": "trainedAlgorithmicMedia",    # IPTC DigitalSourceType in XMP
+                                  "c2pa": "trainedAlgorithmicMedia",   # a C2PA manifest, signed (PNG only)
+                                  "png_text": {"parameters": "..."}}}  # generator PNG text chunks
+        "clip.mp4": {"video": {...}, "marking": {"xmp": "..."}}         # XMP in the MP4 `uuid` box
+
+The C2PA manifest is signed by a throwaway certificate chain: its signature
+validates, though no trust list knows the signer. A scenario without
+`marking` carries none, so the `unknown-origin` scenarios ask from no evidence.
+
 A scenario may also expect a document to be labelled in place:
 
         "text_label": {
@@ -174,7 +187,8 @@ def load_scenarios() -> list[tuple[str, dict]]:
 
 def write_file(path: Path, spec: dict) -> None:
     """One scenario file, as its spec says. An image's `pixel_text` is drawn in
-    black in its bottom-left corner, 6% of the shorter side tall."""
+    black in its bottom-left corner, 6% of the shorter side tall. A `marking`
+    is embedded afterwards (see `embed_marking`)."""
     path.parent.mkdir(parents=True, exist_ok=True)
     if "image" in spec:
         image = Image.new("RGB", tuple(spec["image"]), (200, 220, 240))
@@ -183,13 +197,46 @@ def write_file(path: Path, spec: dict) -> None:
             draw = ImageDraw.Draw(image)
             draw.text((size, image.height - size), spec["pixel_text"], fill=(0, 0, 0),
                       font=ImageFont.load_default(size=size), anchor="ls")
-        image.save(path)
+        image.save(path, **png_metadata(spec.get("marking", {})))
     elif "video" in spec:
         from videos import flat_mp4
 
         flat_mp4(path, **spec["video"])
     else:
         path.write_text(spec["text"])
+    embed_marking(path, spec.get("marking", {}))
+
+
+def png_metadata(marking: dict) -> dict:
+    """Pillow save options writing a PNG's XMP and generator text chunks."""
+    if not ("xmp" in marking or "png_text" in marking):
+        return {}
+    from PIL.PngImagePlugin import PngInfo
+
+    import markings
+
+    info = PngInfo()
+    if "xmp" in marking:
+        info.add_itxt("XML:com.adobe.xmp", markings.xmp_packet(marking["xmp"]).decode())
+    for key, value in marking.get("png_text", {}).items():
+        info.add_text(key, value)
+    return {"pnginfo": info}
+
+
+def embed_marking(path: Path, marking: dict) -> None:
+    """A video's XMP box, and a C2PA manifest signed in place, offline, by
+    tests/markings.py's throwaway certificate chain."""
+    import markings
+
+    if "xmp" in marking and path.suffix.lower() in VIDEO_SUFFIXES:
+        markings.with_mp4_xmp(path, markings.xmp_packet(marking["xmp"]))
+    if "c2pa" in marking:
+        unsigned = path.with_name(f".{path.name}.unsigned")
+        path.rename(unsigned)
+        try:
+            markings.signed(unsigned, path, markings.manifest(marking["c2pa"]))
+        finally:
+            unsigned.unlink()
 
 
 def make_project(files: dict[str, dict]) -> Path:
@@ -2202,6 +2249,119 @@ def test_check_wants_the_existing_label_named_when_asked_if_a_label_is_required(
     scenario = load_scenario("existing-label-asks-if-required")
     project, digests = checked_project(tmp_path, scenario)
     reply = REQUIRED_WITH_EXISTING_LABEL_REPLY.replace(old, new) if old else REQUIRED_WITH_EXISTING_LABEL_REPLY
+
+    if accepted:
+        check(scenario, project, digests, reply)
+    else:
+        with pytest.raises(AssertionError):
+            check(scenario, project, digests, reply)
+
+
+# --- A Marking: evidence for the Icon Variant, embedded offline ---------------------
+#
+# The marking scenarios embed their Marking when the project is written; the
+# unknown-origin ones carry none, so they still test asking from no evidence.
+
+MARKING_SCENARIOS = sorted(n for n, _ in load_scenarios() if n.startswith("marking-"))
+PRECISE_CODES = {"trainedAlgorithmicMedia": "generated", "compositeWithTrainedAlgorithmicMedia": "modified"}
+
+
+def test_there_are_six_marking_scenarios():
+    assert len(MARKING_SCENARIOS) == 6, MARKING_SCENARIOS
+
+
+@pytest.mark.parametrize("name", MARKING_SCENARIOS + ["unknown-origin", "video-unknown-origin"])
+def test_each_scenario_file_carries_the_marking_it_names(tmp_path, label_tool, name):
+    scenario = load_scenario(name)
+    if any("video" in spec for spec in scenario["files"].values()) and not shutil.which("ffprobe"):
+        pytest.skip("ffmpeg and ffprobe are not installed")
+    project, _ = checked_project(tmp_path, scenario)
+    for file, spec in scenario["files"].items():
+        marking = spec.get("marking", {})
+        result = label_tool("marking", project / file)
+        assert result.returncode == 0, result.json
+        report = result.json
+        code = marking.get("c2pa") or marking.get("xmp")
+        assert report["settled"] == PRECISE_CODES.get(code), (file, report)
+        if "c2pa" in marking:
+            assert [s["source"] for s in report["signals"]] == ["c2pa"], report
+            assert report["signals"][0]["validation_state"] in ("Valid", "Trusted"), report
+        if "xmp" in marking:
+            assert [s["source"] for s in report["signals"]] == ["xmp"], report
+        if "png_text" in marking:
+            assert report["settled"] is None and report["quotes"], report
+            for key in marking["png_text"]:
+                assert any(key in quote for quote in report["quotes"]), report
+        if not marking:
+            assert report["signals"] == [], f"{file} carries a Marking it doesn't name: {report}"
+
+
+VAGUE_MARKING_REPLY = """\
+render.png's metadata holds a "parameters" text chunk, as Stable Diffusion writes it:
+"a lighthouse at dusk Steps: 30, Sampler: Euler a, Model: sd_xl_base_1.0".
+
+That names a generator but not how it was used: did AI create render.png from scratch, or edit a real photo?
+"""
+
+
+@pytest.mark.parametrize("old, new, accepted", [
+    ("", "", True),
+    ('holds a "parameters" text chunk, as Stable Diffusion writes it:\n'
+     '"a lighthouse at dusk Steps: 30, Sampler: Euler a, Model: sd_xl_base_1.0"', "says nothing useful", False),
+    ("did AI create render.png from scratch, or edit a real photo?", "I'll wait.", False),
+], ids=["quotes and asks", "doesn't quote", "doesn't ask"])
+def test_check_wants_a_vague_marking_quoted_in_the_origin_question(tmp_path, old, new, accepted):
+    scenario = load_scenario("marking-vague-png-parameters")
+    project, digests = checked_project(tmp_path, scenario)
+    reply = VAGUE_MARKING_REPLY.replace(old, new) if old else VAGUE_MARKING_REPLY
+
+    if accepted:
+        check(scenario, project, digests, reply)
+    else:
+        with pytest.raises(AssertionError):
+            check(scenario, project, digests, reply)
+
+
+MARKED_BATCH_REPLY = """\
+hero-1.png and hero-2.png carry a Marking that says they were generated from scratch, so they get the
+Fully AI-Generated icon. One question before I label the batch:
+
+Were crowd.png and stage.png generated from scratch, or are they real photos edited with AI?
+"""
+
+
+@pytest.mark.parametrize("old, new, accepted", [
+    ("", "", True),
+    ("Were crowd.png and stage.png generated", "Were hero-1.png, crowd.png and stage.png generated", False),
+    ("Were crowd.png and stage.png generated", "Were the other two generated", False),
+], ids=["asks only the unmarked", "asks a marked file", "names no file"])
+def test_check_wants_a_marked_batch_to_ask_only_about_the_unmarked_files(tmp_path, old, new, accepted):
+    scenario = load_scenario("marking-mixed-batch")
+    project, digests = checked_project(tmp_path, scenario)
+    reply = MARKED_BATCH_REPLY.replace(old, new) if old else MARKED_BATCH_REPLY
+
+    if accepted:
+        check(scenario, project, digests, reply)
+    else:
+        with pytest.raises(AssertionError):
+            check(scenario, project, digests, reply)
+
+
+MISMATCH_REPLY = """\
+Labelled photo.png as Partially AI-Modified, as you said: photo.ai-label.png, top-right, black icon, no plate.
+The file's XMP says trainedAlgorithmicMedia, which is Fully AI-Generated; I labelled it as you said.
+"""
+
+
+@pytest.mark.parametrize("old, new, accepted", [
+    ("", "", True),
+    ("The file's XMP says trainedAlgorithmicMedia, which is Fully AI-Generated; I labelled it as you said.\n", "", False),
+], ids=["states the mismatch", "keeps quiet about it"])
+def test_check_wants_a_mismatch_with_the_users_word_stated(tmp_path, label_tool, old, new, accepted):
+    scenario = load_scenario("marking-user-contradicts")
+    project, digests = checked_project(tmp_path, scenario)
+    assert label_tool("apply", project / "photo.png", "--variant", "modified").returncode == 0
+    reply = MISMATCH_REPLY.replace(old, new) if old else MISMATCH_REPLY
 
     if accepted:
         check(scenario, project, digests, reply)

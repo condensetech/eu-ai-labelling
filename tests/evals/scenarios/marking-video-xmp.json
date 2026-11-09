@@ -1,0 +1,23 @@
+{
+  "description": "A short video whose XMP says trainedAlgorithmicMedia, with no preview wanted and no visibility preference: labelled Fully AI-Generated without asking, all the way through, and the reply names the XMP Marking.",
+  "files": {
+    "clip.mp4": {
+      "video": {
+        "seconds": 2,
+        "size": "640x360"
+      },
+      "marking": {
+        "xmp": "trainedAlgorithmicMedia"
+      }
+    }
+  },
+  "prompt": "/eu-ai-labelling label clip.mp4. It goes on our public product page. I don't need a preview, and I have no preference on when the label shows: use your defaults.",
+  "expect": {
+    "variant": "Fully AI-Generated",
+    "labelled": true,
+    "visibility": "continuous",
+    "reply_matches": [
+      "xmp|iptc|digitalsourcetype|trainedalgorithmicmedia"
+    ]
+  }
+}

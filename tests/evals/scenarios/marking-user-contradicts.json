@@ -1,0 +1,22 @@
+{
+  "description": "The user calls a photo AI-modified while its XMP says trainedAlgorithmicMedia: labelled Partially AI-Modified as the user said, without asking, and the reply states the mismatch.",
+  "files": {
+    "photo.png": {
+      "image": [
+        1200,
+        800
+      ],
+      "marking": {
+        "xmp": "trainedAlgorithmicMedia"
+      }
+    }
+  },
+  "prompt": "/eu-ai-labelling label photo.png as partially AI-modified: it's a real photo of our office that I retouched with AI.",
+  "expect": {
+    "variant": "Partially AI-Modified",
+    "labelled": true,
+    "reply_matches": [
+      "xmp|iptc|digitalsourcetype|trainedalgorithmicmedia|metadata|marking"
+    ]
+  }
+}

@@ -1,0 +1,22 @@
+{
+  "description": "An image whose C2PA manifest, with a valid signature, says trainedAlgorithmicMedia: labelled Fully AI-Generated without asking, and the reply names the C2PA Marking that settled it.",
+  "files": {
+    "hero.png": {
+      "image": [
+        1200,
+        800
+      ],
+      "marking": {
+        "c2pa": "trainedAlgorithmicMedia"
+      }
+    }
+  },
+  "prompt": "/eu-ai-labelling label hero.png",
+  "expect": {
+    "variant": "Fully AI-Generated",
+    "labelled": true,
+    "reply_matches": [
+      "c2pa"
+    ]
+  }
+}

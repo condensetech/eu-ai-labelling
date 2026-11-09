@@ -1,0 +1,22 @@
+{
+  "description": "An image whose XMP says compositeWithTrainedAlgorithmicMedia: labelled Partially AI-Modified without asking, and the reply names the XMP Marking that settled it.",
+  "files": {
+    "photo.png": {
+      "image": [
+        1200,
+        800
+      ],
+      "marking": {
+        "xmp": "compositeWithTrainedAlgorithmicMedia"
+      }
+    }
+  },
+  "prompt": "/eu-ai-labelling label photo.png",
+  "expect": {
+    "variant": "Partially AI-Modified",
+    "labelled": true,
+    "reply_matches": [
+      "xmp|iptc|digitalsourcetype|compositewithtrainedalgorithmicmedia"
+    ]
+  }
+}

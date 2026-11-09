@@ -1,0 +1,24 @@
+{
+  "description": "An image with only a Stable Diffusion `parameters` PNG text chunk, a vague Marking: the skill asks whether AI created it from scratch or edited a real one, quoting the chunk, and labels nothing yet.",
+  "files": {
+    "render.png": {
+      "image": [
+        1200,
+        800
+      ],
+      "marking": {
+        "png_text": {
+          "parameters": "a lighthouse at dusk\nSteps: 30, Sampler: Euler a, Model: sd_xl_base_1.0"
+        }
+      }
+    }
+  },
+  "prompt": "/eu-ai-labelling label render.png",
+  "expect": {
+    "labelled": false,
+    "asks_origin": true,
+    "reply_matches": [
+      "parameters|sdxl|euler|lighthouse"
+    ]
+  }
+}
