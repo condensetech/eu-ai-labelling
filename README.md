@@ -41,6 +41,32 @@ codex plugin marketplace add condensetech/eu-ai-labelling
 
 Then open `/plugins` in Codex and install **EU AI Labelling**.
 
+### Any agent (skills.sh)
+
+The [`skills` CLI](https://github.com/vercel-labs/skills) from [skills.sh](https://www.skills.sh/) installs the skill on its own, without the plugin. It works with Claude Code, Codex, Cursor, Gemini CLI and other agents:
+
+```
+npx skills add condensetech/eu-ai-labelling
+```
+
+The CLI asks which agents to install it into. It installs into the current project; add `-g` to install it for all your projects instead.
+
+The CLI needs Node 22.20 or later.
+
+The entry point is the same as the plugin's: `/eu-ai-labelling` in Claude Code, `$eu-ai-labelling` in Codex.
+
+To update it:
+
+```
+npx skills update
+```
+
+To pin a release, put its tag after `#` (the CLI reads a name after `@` as a skill name, not a release):
+
+```
+npx skills add condensetech/eu-ai-labelling#v0.1.0
+```
+
 ### Requirements
 
 - **Images:** [`uv`](https://docs.astral.sh/uv/), or Python 3.10+ with Pillow and resvg-py installed.

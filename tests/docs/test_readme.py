@@ -53,6 +53,24 @@ def test_readme_installs_the_published_plugin_in_both_tools():
     assert "/plugins" in install
 
 
+def test_readme_installs_the_skill_in_any_agent_with_the_skills_cli():
+    # Releases are tagged `v<version>`, with the version the plugin manifest names.
+    tag = "v" + json.loads((REPO_ROOT / ".claude-plugin" / "plugin.json").read_text())["version"]
+    install = section(readme(), "Any agent (skills.sh)")
+    lines = fenced_lines(install)
+
+    # Agent-neutral: no `-a <agent>` pin, the CLI asks which agents to install into.
+    assert f"npx skills add {REPOSITORY}" in lines
+    assert not any(" -a " in line or "--agent" in line for line in lines)
+    assert "`-g`" in install
+    assert "Node 22.20" in install
+    assert "npx skills update" in lines
+    # The CLI reads `owner/repo@name` as a skill name; a tag or branch goes after `#`.
+    assert f"npx skills add {REPOSITORY}#{tag}" in lines
+    # Installed as a plain skill, it has the same entry point as the plugin.
+    assert f"`/{PLUGIN_NAME}`" in install and f"`${PLUGIN_NAME}`" in install
+
+
 @pytest.mark.parametrize("example", [
     "label photo.png as fully AI-generated",  # an image
     "label article.md as fully AI-generated",  # a text document
