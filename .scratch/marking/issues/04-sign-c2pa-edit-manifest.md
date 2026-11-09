@@ -4,7 +4,7 @@
 
 **Blocked by:** 03
 
-**Status:** needs-triage
+**Status:** wontfix
 
 Open questions:
 
@@ -14,3 +14,7 @@ Open questions:
 - Should a timestamp authority be used, so the manifest outlives the certificate?
 - `marking` would need to follow the `parentOf` ingredient to find the original's `trainedAlgorithmicMedia`. The spec currently grades an ingredient's source type as vague. Should that change for a parent ingredient under a valid edit manifest?
 - The plugin must never ship a key.
+
+## Comments
+
+2026-11-09: Discarded. Signing needs the user's own C2PA certificate; without one on the C2PA Trust List, verifiers show the copy as valid from an unknown source. Deployers have no legal duty to keep the Marking, and ticket 03 already keeps the IPTC DigitalSourceType. Reopen if a user asks for signed Labelled Copies.
