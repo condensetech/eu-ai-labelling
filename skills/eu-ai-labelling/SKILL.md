@@ -15,7 +15,7 @@ Every path in this skill and its reference files to `scripts/`, `assets/` or `re
 - `assets/icons/`: the official EU Icon SVGs, which label_tool renders and copies; `assets/icons/SOURCE.md` records where they came from.
 - `references/`: one procedure per content type, loaded only when that type is being labelled.
 
-Run the CLI with `uv run <skill folder>/scripts/label_tool.py <subcommand> ...`. When `uv` is missing, use `python3 <skill folder>/scripts/label_tool.py ...` provided Pillow and resvg-py are installed (without c2pa-python, `marking` skips C2PA and reports `c2pa: unavailable`); if neither works, tell the user to install `uv`.
+Run the CLI with `uv run <skill folder>/scripts/label_tool.py <subcommand> ...`. When `uv` is missing, use `python3 <skill folder>/scripts/label_tool.py ...` provided Pillow 11 or later and resvg-py are installed (without c2pa-python, `marking` skips C2PA and reports `c2pa: unavailable`); if neither works, tell the user to install `uv`.
 
 ## Steps
 
@@ -79,7 +79,7 @@ It prints JSON with `settled` (`generated`, `modified` or null), `settled_by` (t
 - When `c2pa` is `unavailable`, C2PA wasn't checked: say so only when you ask the origin question, and never hold up labelling for it.
 - **The user's word wins.** When the user named the variant, or said how AI was involved, and `settled` says the other one, label as they said, without asking. The preview and the report state the mismatch as a fact ("the file's XMP says trainedAlgorithmicMedia, which is Fully AI-Generated; labelled Partially AI-Modified, as you said"), never which one is right. When `settled` agrees with them, the report says so in one line; the preview doesn't.
 
-A Labelled Copy keeps the original's IPTC DigitalSourceType, unchanged, and leaves its C2PA manifest behind. When `apply` or `video-apply` prints `marking_kept`, the report says, in the user's language: "the copy keeps the IPTC DigitalSourceType; the original's C2PA provenance is not carried over". Without `marking_kept`, the original had no such Marking: the report is silent about it.
+A Labelled Copy keeps the original's IPTC DigitalSourceType and IPTC AI fields (`marking_kept`) and leaves its C2PA manifest behind (`c2pa_left_behind`). The report says, in the user's language, what `apply` or `video-apply` printed: "the copy keeps the IPTC DigitalSourceType" when `marking_kept` has a `DigitalSourceType`, and "the original's C2PA provenance is not carried over" when `c2pa_left_behind` is true; with both, as one sentence: "the copy keeps the IPTC DigitalSourceType; the original's C2PA provenance is not carried over". With neither, the report is silent about it.
 
 ## An Existing Label
 

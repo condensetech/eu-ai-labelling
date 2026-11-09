@@ -106,6 +106,14 @@ def test_the_report_says_what_the_labelled_copy_keeps_only_when_the_tool_kept_it
     kept = text.split("`marking_kept`", 1)[1].split("\n\n", 1)[0]
     assert KEPT in kept, "the report line, word for word"
     assert "`apply`" in text and "`video-apply`" in text
+    keeps, left = KEPT.split("; ")
+    assert f'"{keeps}" when `marking_kept` has a `DigitalSourceType`' in kept
+    assert f'"{left}" when `c2pa_left_behind` is true' in kept
+    assert "the original had no such Marking" not in text
+
+
+def test_the_python3_fallback_names_the_pillow_that_writes_a_jpegs_xmp():
+    assert "provided Pillow 11 or later and resvg-py are installed" in (SKILL_DIR / "SKILL.md").read_text()
 
 
 def test_apply_prints_the_marking_kept_the_rule_reads(tmp_path):
@@ -148,7 +156,7 @@ def test_the_batch_report_says_once_what_the_copies_keep():
     report = step(reference("batch.md"), "Report the batch")
     settled = report.split("**Settled by Marking:**", 1)[1].split("\n   - **", 1)[0]
     assert "`marking_kept`" in settled and "say once" in settled
-    assert "IPTC DigitalSourceType" in settled and "C2PA provenance is not carried over" in settled
+    assert "`c2pa_left_behind`" in settled and "SKILL.md **A Marking**" in settled
     assert "no longer carry" not in report
 
 
