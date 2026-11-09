@@ -44,7 +44,24 @@ def test_the_rule_leaves_the_existing_label_alone_unless_asked():
 
 
 def test_the_rule_never_claims_an_absence():
-    assert "Never say none was found" in rule()
+    text = rule()
+    assert "Never say none was found" in text
+    # It holds when nothing is found too, so it can't sit in the "When it finds one" list.
+    findings = text[text.index("When it finds one"):]
+    absence = next(p for p in findings.split("\n\n") if "Never say none was found" in p)
+    assert not absence.lstrip().startswith("- "), "the ban on absence claims reads as part of what to do on a find"
+
+
+def test_the_report_says_nothing_of_existing_labels_when_none_was_found():
+    report = step(SKILL_MD.read_text(), "Report")
+    assert re.search(r"none was found, say nothing about Existing Labels", report)
+
+
+def test_whether_a_label_is_required_looks_at_the_content_first():
+    required = section(SKILL_MD.read_text(), "Whether a Label is required")
+    assert re.search(r"Before answering, look at the content", required)
+    for where in ("read the document", "open the image", "read the project", "frames you already opened"):
+        assert where in required, f"no word on how to look: {where}"
 
 
 def test_the_skill_applies_the_rule_where_it_labels_reports_and_answers():
@@ -53,3 +70,30 @@ def test_the_skill_applies_the_rule_where_it_labels_reports_and_answers():
     assert "Existing Label" in step(skill, "Report")
     required = section(skill, "Whether a Label is required")
     assert "Existing Label" in required and "as a fact" in required
+
+
+CHECKS = ("text.md", "image.md", "creative-work.md", "video.md", "site.md")
+
+
+def test_every_check_says_nothing_when_it_finds_none():
+    # The agent reports what each check found: where the check runs, it must hear
+    # that finding none is reported as nothing at all.
+    references = SKILL_MD.parent / "references"
+    for name in CHECKS:
+        text = (references / name).read_text()
+        check = next(p for p in re.split(r"\n(?=\s*(?:- |\d\. ))|\n\n", text) if "**An Existing Label:**" in p)
+        assert "say nothing about Existing Labels" in check, f"{name}: the check never says what to write when it finds none"
+
+
+def test_no_report_list_asks_for_a_line_when_none_was_found():
+    references = SKILL_MD.parent / "references"
+    for name in CHECKS:
+        for line in (references / name).read_text().splitlines():
+            if line.startswith("- each Existing Label found"):
+                assert "only when you found one" in line, f"{name}: {line}"
+
+
+def test_the_batch_and_required_answers_stay_silent_on_files_without_one():
+    skill = SKILL_MD.read_text()
+    assert "say nothing about Existing Labels" in section(skill, "Whether a Label is required")
+    assert "say nothing about Existing Labels" in section(skill, "A batch of files")

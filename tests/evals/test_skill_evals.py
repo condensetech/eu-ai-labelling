@@ -270,7 +270,7 @@ def verdicts(text: str) -> list[str]:
 # The official sources the skill points to when asked whether a Label is required.
 GUIDANCE = re.compile(r"guidelines|digital-strategy\.ec\.europa\.eu")
 SERVICE_DESK = re.compile(r"service desk|ai-act-service-desk")
-OFFER = r"\bcan (?:apply|add)|\bwant me to|would you like|shall i|should i|\boffer|\bi'll (?:add|apply)"
+OFFER = r"\bcan (?:apply|add)|\bwant me to|would you like|shall i|should i|\boffer|\bi(?:'ll|'d)(?: then)? (?:add|apply)"
 # The question about how AI was involved: from scratch, or an edit of something real.
 FROM_SCRATCH = r"scratch|fully (?:ai[- ])?generated|generated (?:entirely|completely)|created by ai|made by ai"
 AN_EDIT = r"edit|modif|real photo|existing|altered|changed"
@@ -288,7 +288,7 @@ LABEL_ANYWAY = r"\banyway\b|\bstill\b|\bleave\b|\bas it is\b|\bkeep\b"
 ADEQUACY = r"\b(?:in)?sufficient\b|\b(?:in)?adequate\b|\b(?:non-?)?compliant\b|\bsatisf(?:y|ies|actory)\b"
 # A claim that no Existing Label is there, which the skill never makes.
 ABSENCE_RE = re.compile(
-    r"\bno (?:existing|other|prior|pre-?existing|on-?screen) (?:ai )?(?:label|disclaimer|disclosure|notice)s?\b"
+    r"\bno (?:existing|other|prior|pre-?existing|on-?screen|visible) (?:ai )?(?:label|disclaimer|disclosure|notice)s?\b"
     r"|\b(?:didn't|did not|couldn't|could not) (?:find|see|spot) (?:an?|any) (?:existing |other |on-?screen )?(?:ai )?(?:label|disclaimer|disclosure|notice)"
 )
 
@@ -500,8 +500,10 @@ def check_batch_questions(spec: dict, text: str, reply: str) -> None:
     """The batch questions asked only about the files that differ."""
     asked = questions(text)
     assert asked, f"no question asked:\n{reply}"
+    # A file may be named in a lead-in on the question's line ("**recap.mp4.** Did AI ...?").
+    asked_lines = [line for line in text.splitlines() if any(q in line for q in asked)]
     for name in spec["about"]:
-        assert any(name.lower() in q for q in asked), f"no question names {name}:\n{reply}"
+        assert any(name.lower() in q for q in asked + asked_lines), f"no question names {name}:\n{reply}"
     for name in spec["not_about"]:
         offending = [q for q in asked if name.lower() in q]
         assert not offending, f"{name} is settled but asked about again: {offending}\n{reply}"
@@ -878,6 +880,7 @@ WEAKENED_REQUIRED_REPLIES = {
 @pytest.mark.parametrize("offer", [
     "Would you like me to add a Label to it anyway?",
     "If you want a Label on it anyway, tell me and I'll add one.",
+    "If you want a Label, say so. I'd then apply the Basic EU Icon with a text label.",
 ])
 def test_check_accepts_pointing_to_the_official_sources_without_a_verdict(tmp_path, offer):
     scenario = load_scenario(REQUIRED_SCENARIO)
@@ -1247,6 +1250,7 @@ def test_check_accepts_asking_about_an_existing_label(tmp_path, extra):
 @pytest.mark.parametrize("claim", [
     "I found no existing label in post.md.",
     "I didn't find any other AI disclaimer in post.md.",
+    "I read the file. It has no visible AI disclosure, such as a disclaimer line.",
 ])
 def test_check_rejects_claiming_no_existing_label(tmp_path, label_tool, claim):
     scenario = load_scenario("italian-article")
@@ -1382,7 +1386,8 @@ def test_check_accepts_a_batch_asking_about_the_image_with_an_existing_label(tmp
 
 
 @pytest.mark.parametrize("old, new", [
-    ("Should I add the EU Icon to stage.png anyway", "Should I add the EU Icon to it anyway"),
+    ("1. stage.png already shows \"AI generated\" in its bottom-left corner. Should I add the EU Icon to stage.png anyway",
+     "1. One image already shows \"AI generated\" in its bottom-left corner. Should I add the EU Icon to it anyway"),
     ("Should I add the EU Icon to stage.png anyway, or leave it as it is?", "I'll label the others first."),
 ], ids=["question doesn't name the file", "no question"])
 def test_check_rejects_a_batch_reply_not_asking_about_the_existing_label_by_name(tmp_path, old, new):
@@ -1547,11 +1552,17 @@ WEAKENED_BATCH_REPLIES = {
 }
 
 
-def test_check_accepts_a_batch_reply_asking_only_about_the_differing_files(tmp_path):
+@pytest.mark.parametrize("old, new", [
+    ("", ""),
+    ("1. Were crowd.png and stage.png generated from scratch",
+     "**Question: crowd.png and stage.png.** Were they generated from scratch"),
+], ids=["named in the question", "named in the question's lead-in"])
+def test_check_accepts_a_batch_reply_asking_only_about_the_differing_files(tmp_path, old, new):
     scenario = load_scenario(BATCH_SCENARIO)
     project, digests = checked_project(tmp_path, scenario)
+    assert old in COMPLIANT_BATCH_REPLY
 
-    check(scenario, project, digests, COMPLIANT_BATCH_REPLY)
+    check(scenario, project, digests, COMPLIANT_BATCH_REPLY.replace(old, new) if old else COMPLIANT_BATCH_REPLY)
 
 
 @pytest.mark.parametrize("weakened", sorted(WEAKENED_BATCH_REPLIES))
@@ -2163,3 +2174,39 @@ def test_check_rejects_claiming_no_on_screen_notice(tmp_path, label_tool):
 
     with pytest.raises(AssertionError):
         check(scenario, project, digests, f"{VIDEO_REPLY} I found no on-screen AI notice in the frames.")
+
+
+# --- An Existing Label in an answer on whether a Label is required ---------------
+
+REQUIRED_WITH_EXISTING_LABEL_REPLY = """\
+I can't tell you whether the law requires a Label for post.md: that depends on facts and a legal
+judgement that are yours to make. The official sources are:
+
+- the Guidelines on Article 50: https://digital-strategy.ec.europa.eu/en/policies/guidelines-ai-transparency-obligations
+- the Code of Practice on transparency of AI-generated content: https://digital-strategy.ec.europa.eu/en/policies/code-practice-ai-generated-content
+- the AI Act Service Desk: https://ai-act-service-desk.ec.europa.eu/
+
+post.md already ends with its own disclaimer: the last line, below the rule, reads
+"This article was generated by AI."
+
+Would you like me to add the EU Icon to it?
+
+This is not legal advice.
+"""
+
+
+@pytest.mark.parametrize("old, new, accepted", [
+    ("", "", True),
+    ('reads\n"This article was generated by AI."', "is a disclaimer.", False),
+    ("Would you like me to add the EU Icon to it?", "The disclaimer is enough on its own, so no Label is needed.", False),
+], ids=["names it", "doesn't say what it says", "judges it"])
+def test_check_wants_the_existing_label_named_when_asked_if_a_label_is_required(tmp_path, old, new, accepted):
+    scenario = load_scenario("existing-label-asks-if-required")
+    project, digests = checked_project(tmp_path, scenario)
+    reply = REQUIRED_WITH_EXISTING_LABEL_REPLY.replace(old, new) if old else REQUIRED_WITH_EXISTING_LABEL_REPLY
+
+    if accepted:
+        check(scenario, project, digests, reply)
+    else:
+        with pytest.raises(AssertionError):
+            check(scenario, project, digests, reply)

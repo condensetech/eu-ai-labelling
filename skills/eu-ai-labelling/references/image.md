@@ -24,7 +24,7 @@ Images get the **Fully AI-Generated** (`generated`) or **Partially AI-Modified**
 
    Done when the command exits 0. On an error, follow step 6.
 2. **Look at the image yourself.** Open it with your image-viewing or file-reading tool. Note where faces, text, logos and the main subject are. `score` sees only edges and contrast, so it can't tell a face from a patterned wall.
-   - **An Existing Label:** look in the pixels for an "AI generated" text or another AI icon. When the image is shown in a document or page, also read the text around it for a caption that already discloses AI involvement. Alt text that mentions AI is not one: it keeps its handling in `references/update-references.md`. When you find one, follow **An Existing Label** in SKILL.md, and write no Labelled Copy until the user answers.
+   - **An Existing Label:** look in the pixels for an "AI generated" text or another AI icon. When the image is shown in a document or page, also read the text around it for a caption that already discloses AI involvement. Alt text that mentions AI is not one: it keeps its handling in `references/update-references.md`. When you find one, follow **An Existing Label** in SKILL.md, and write no Labelled Copy until the user answers. When you find none, say nothing about Existing Labels.
 3. **Choose a corner.** A corner is **free** when `score` reports it not busy, and the icon there covers no face, text or main subject.
    - Start from `suggested_corner`. If it is free, use it.
    - If it isn't free but another corner is, use the free corner that comes first in `ranking`. When that is not the `preferred_corner`, tell the user why you didn't use it.
