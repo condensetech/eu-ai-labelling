@@ -1,6 +1,6 @@
 # 02: Keep the manifest versions in step, and tag v0.1.0
 
-**What to build:** A test that the plugin's three manifest versions agree, and the first release tag, so users can pin `condensetech/eu-ai-labelling@v0.1.0`. See [spec](../spec.md).
+**What to build:** A test that the plugin's three manifest versions agree, and the first release tag, so users can pin `condensetech/eu-ai-labelling#v0.1.0`. See [spec](../spec.md).
 
 **Blocked by:** none
 

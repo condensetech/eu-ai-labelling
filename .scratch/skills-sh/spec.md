@@ -12,7 +12,7 @@ The skill can be installed only as a Claude Code plugin or a Codex plugin. [skil
 - **The skill is already portable.** `skills/eu-ai-labelling/SKILL.md` has `name` and `description`, and it resolves `scripts/`, `assets/` and `references/` relative to its own folder, not through a plugin root.
 - **Discovery:** on 2026-11-09, `npx -y skills add . --list` found exactly one skill, `eu-ai-labelling`. It did not offer the development skills under `.claude/skills/` and `.agents/skills/` (installed from `mattpocock/skills`, recorded in `skills-lock.json`).
 - **What carries over:** only skill folders. Hooks, MCP servers and other plugin-only parts are not installed. The plugin has none since issue 54, so nothing is lost.
-- **Pinning and updates:** users can pin `condensetech/eu-ai-labelling@<tag>`. `npx skills update` and `npx skills check` handle updates. The CLI needs Node 22.20 or later.
+- **Pinning and updates:** users can pin a release with `condensetech/eu-ai-labelling#<tag>` (in `skills` CLI 1.7.0, a name after `@` selects a skill, not a release). `npx skills update` and `npx skills check` handle updates. The CLI needs Node 22.20 or later.
 
 ## Confirmed decisions
 
