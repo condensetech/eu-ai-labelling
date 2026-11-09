@@ -204,8 +204,12 @@ def test_an_original_without_c2pa_leaves_none_behind(tmp_path, label_tool):
 @pytest.mark.skipif(shutil.which("uv") is None, reason="uv not installed")
 def test_marking_kept_is_what_the_copy_carries_even_where_pillow_cannot_write_it(tmp_path):
     """Pillow 10, which the python3 fallback may have, ignores the `xmp` option of a JPEG save."""
+    if shutil.which("uv") is None:
+        pytest.skip("needs uv to run label_tool under Pillow 10")
     original = jpeg(tmp_path / "photo.jpg", xmp=full_xmp("trainedAlgorithmicMedia"), size=SIZE)
-    proc = subprocess.run(["uv", "run", "--quiet", "--no-project", "--with", "pillow==10.4.0", "--with", "resvg-py",
+    # Python 3.12: Pillow 10.4.0 ships wheels up to 3.13 only, and building it from source needs libjpeg headers.
+    proc = subprocess.run(["uv", "run", "--quiet", "--no-project", "--python", "3.12",
+                           "--with", "pillow==10.4.0", "--with", "resvg-py",
                            "python", str(LABEL_TOOL), "apply", str(original), "--variant", "generated"],
                           capture_output=True, text=True, timeout=600)
     assert proc.returncode == 0, proc.stderr
